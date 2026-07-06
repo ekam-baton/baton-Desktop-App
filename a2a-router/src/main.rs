@@ -18,7 +18,7 @@ use dashmap::DashMap;
 use dotenvy::dotenv;
 use futures::{sink::SinkExt, stream::StreamExt};
 use governor::{Quota, RateLimiter};
-use jsonwebtoken::{decode, DecodingKey, Validation};
+use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use prometheus::{register_counter_vec, register_gauge, CounterVec, Encoder, Gauge, TextEncoder};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
@@ -57,7 +57,7 @@ impl Config {
             port,
             internal_url: std::env::var("INTERNAL_URL").unwrap_or(default_internal),
             jwt_secret: std::env::var("JWT_SECRET")
-                .unwrap_or_else(|_| "baton-dev-secret-change-in-production".into()),
+                .expect("JWT_SECRET must be set in the environment for real-world usage"),
             max_payload_bytes: std::env::var("A2A_MAX_PAYLOAD_BYTES")
                 .unwrap_or_else(|_| "102400".into())
                 .parse()
@@ -80,6 +80,17 @@ impl Config {
 struct Claims {
     pub sub: String,
     pub exp: usize,
+}
+
+#[derive(Deserialize, Debug)]
+struct LoginRequest {
+    client_id: String,
+    secret: String,
+}
+
+#[derive(Serialize, Debug)]
+struct LoginResponse {
+    token: String,
 }
 
 // ─── State ───────────────────────────────────────────────────────────────────
@@ -162,6 +173,7 @@ async fn main() {
 
     let app = Router::new()
         .route("/ws/{client_id}", get(ws_handler))
+        .route("/login", post(login_handler))
         .route("/internal/forward", post(internal_forward_handler))
         .route("/health", get(health_handler))
         .route("/ready", get(ready_handler))
@@ -183,6 +195,23 @@ async fn main() {
 
 async fn health_handler() -> impl IntoResponse {
     Json(serde_json::json!({ "status": "ok", "service": "a2a-router" }))
+}
+
+async fn login_handler(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<LoginRequest>,
+) -> impl IntoResponse {
+    if req.secret != state.config.jwt_secret {
+        return (StatusCode::UNAUTHORIZED, "Invalid secret").into_response();
+    }
+    
+    match mint_jwt(&req.client_id, &state.config.jwt_secret) {
+        Ok(token) => Json(LoginResponse { token }).into_response(),
+        Err(e) => {
+            error!("Failed to mint JWT: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, "Internal Error").into_response()
+        }
+    }
 }
 
 async fn ready_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -459,6 +488,25 @@ fn validate_jwt(token: &str, secret: &str) -> Result<Claims, jsonwebtoken::error
     validation.validate_exp = true;
     let data = decode::<Claims>(token, &DecodingKey::from_secret(secret.as_bytes()), &validation)?;
     Ok(data.claims)
+}
+
+fn mint_jwt(client_id: &str, secret: &str) -> Result<String, jsonwebtoken::errors::Error> {
+    let expiration = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as usize
+        + 3600; // 1 hour token
+
+    let claims = Claims {
+        sub: client_id.to_string(),
+        exp: expiration,
+    };
+
+    encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(secret.as_bytes()),
+    )
 }
 
 async fn shutdown_signal() {

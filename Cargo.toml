@@ -1,7 +1,7 @@
 [workspace]
 members = [
     "mcp-connector",
-    "a2a-router", "baton-tester",
+    "a2a-router",
 ]
 resolver = "2"
 
