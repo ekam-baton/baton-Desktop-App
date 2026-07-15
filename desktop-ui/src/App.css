@@ -1,15 +1,15 @@
 :root {
-  --bg-dark: #0a0a0c;
-  --bg-panel: rgba(20, 20, 25, 0.7);
-  --bg-sidebar: rgba(12, 12, 15, 0.85);
-  --border-glow: rgba(0, 255, 204, 0.3);
-  --border-dim: rgba(255, 255, 255, 0.05);
-  --text-main: #e0e0e0;
-  --text-muted: #888;
-  --accent: #00ffcc;
-  --accent-dim: rgba(0, 255, 204, 0.1);
-  --danger: #ff4444;
-  --success: #00ffcc;
+  --bg-dark: #070B14; /* BatonBackground */
+  --bg-panel: #0F1623; /* BatonSurface */
+  --bg-sidebar: #0A0E1A; /* BatonNavy */
+  --border-glow: rgba(61, 142, 255, 0.3);
+  --border-dim: #2A3448; /* BatonOutline */
+  --text-main: #E8EAF6; /* BatonOnBackground */
+  --text-muted: #B0BEC5; /* BatonOnSecondary */
+  --accent: #3D8EFF; /* BatonElectric */
+  --accent-dim: rgba(61, 142, 255, 0.1);
+  --danger: #FF453A; /* BatonError */
+  --success: #3D8EFF;
 }
 
 body {
@@ -20,7 +20,7 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
   height: 100vh;
   overflow: hidden;
-  background-image: radial-gradient(circle at 50% -20%, rgba(0, 255, 204, 0.08) 0%, transparent 50%);
+  background-image: radial-gradient(circle at 50% -20%, rgba(61, 142, 255, 0.08) 0%, transparent 50%);
 }
 
 .layout {
@@ -47,12 +47,10 @@ body {
   margin-bottom: 3rem;
 }
 
-.logo-icon {
-  width: 24px;
-  height: 24px;
-  background: var(--accent);
-  border-radius: 4px;
-  box-shadow: 0 0 10px var(--accent);
+.logo-image {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
 }
 
 .sidebar-logo h2 {
@@ -167,7 +165,7 @@ h1 {
 
 .request-card:hover {
   border-color: var(--border-glow);
-  box-shadow: 0 0 20px rgba(0, 255, 204, 0.05);
+  box-shadow: 0 0 20px rgba(61, 142, 255, 0.05);
 }
 
 .request-card .info {
@@ -211,8 +209,8 @@ button {
 }
 
 .btn-approve:hover {
-  background: rgba(0, 255, 204, 0.1);
-  box-shadow: 0 0 15px rgba(0, 255, 204, 0.2);
+  background: rgba(61, 142, 255, 0.1);
+  box-shadow: 0 0 15px rgba(61, 142, 255, 0.2);
 }
 
 .btn-deny {

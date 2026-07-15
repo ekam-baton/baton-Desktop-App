@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import "./App.css";
+import logo from "./assets/logo.png";
 
 interface Agent {
   client_id: string;
@@ -68,7 +69,7 @@ function App() {
     <div className="layout">
       <aside className="sidebar">
         <div className="sidebar-logo">
-          <div className="logo-icon"></div>
+          <img src={logo} alt="Baton Logo" className="logo-image" />
           <h2>Baton</h2>
         </div>
         <nav className="sidebar-nav">
