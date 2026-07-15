@@ -7,6 +7,7 @@ use tracing::info;
 pub mod local;
 pub mod frameworks;
 pub mod cloud;
+pub mod stdio;
 
 /// Legacy tool-call trait (mirrors the original mcp-connector design).
 #[async_trait]

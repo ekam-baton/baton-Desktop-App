@@ -22,6 +22,7 @@ pub async fn start_mdns_broadcast(state: Arc<AppState>) -> Result<()> {
     let mut properties = std::collections::HashMap::new();
     properties.insert("version".to_owned(), env!("CARGO_PKG_VERSION").to_owned());
     properties.insert("secure".to_owned(), "true".to_owned());
+    properties.insert("owner_name".to_owned(), config.agent_owner_name.clone());
 
     let service_info = ServiceInfo::new(
         SERVICE_TYPE,
@@ -77,8 +78,6 @@ pub fn print_connection_qr(config: &Config) {
 fn gethostname() -> String {
     std::env::var("HOSTNAME")
         .or_else(|_| {
-            let mut buf = [0u8; 64];
-            // Try to get hostname from system
             std::process::Command::new("hostname")
                 .output()
                 .ok()

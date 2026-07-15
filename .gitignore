@@ -2,3 +2,8 @@
 **/*.rs.bk
 Cargo.lock
 .env
+
+*.db
+baton_*.txt
+baton_*.bin
+node_modules/

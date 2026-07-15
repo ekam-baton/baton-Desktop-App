@@ -1,6 +1,6 @@
 CREATE TABLE IF NOT EXISTS paired_devices (
-    client_id VARCHAR(64) PRIMARY KEY,
-    public_key VARCHAR(64) NOT NULL,
-    device_name VARCHAR(128) NOT NULL,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    client_id TEXT PRIMARY KEY,
+    public_key TEXT NOT NULL,
+    device_name TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now'))
 );

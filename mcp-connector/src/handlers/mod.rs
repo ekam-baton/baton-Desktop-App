@@ -4,3 +4,5 @@ pub mod metrics;
 pub mod pair;
 pub mod tools;
 pub mod upload;
+pub mod mcp;
+pub mod admin;

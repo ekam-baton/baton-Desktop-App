@@ -2,6 +2,7 @@
 members = [
     "mcp-connector",
     "a2a-router",
+    "desktop-ui/src-tauri"
 ]
 resolver = "2"
 
@@ -49,7 +50,7 @@ sha2 = "0.10"
 hex = "0.4"
 
 # Database
-sqlx = { version = "0.8", features = ["postgres", "runtime-tokio", "migrate", "uuid"] }
+sqlx = { version = "0.8", features = ["postgres", "sqlite", "any", "runtime-tokio", "migrate", "uuid"] }
 redis = { version = "0.27", features = ["tokio-comp", "json"] }
 deadpool-redis = "0.18"
 

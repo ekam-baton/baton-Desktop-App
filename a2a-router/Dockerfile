@@ -1,7 +1,7 @@
-FROM rust:1.80-alpine AS builder
+FROM rust:alpine AS builder
 
 WORKDIR /usr/src/app
-RUN apk add --no-cache musl-dev
+RUN apk add --no-cache musl-dev pkgconf openssl-dev openssl-libs-static
 
 # Copy workspace
 COPY . .

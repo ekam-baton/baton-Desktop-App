@@ -40,7 +40,8 @@ services:
     environment:
       - RUST_LOG=info
       - REDIS_URL=redis://redis:6379
-      - JWT_SECRET=${JWT_SECRET:-YOUR_SECURE_SECRET_HERE}
+      - JWT_SECRET=${JWT_SECRET:-your-secure-secret-here-minimum-32-chars-long}
+      - DATABASE_URL=postgres://baton:batonpassword@postgres:5432/baton
     depends_on:
       redis:
         condition: service_healthy
@@ -53,12 +54,13 @@ services:
     network_mode: "host" # Needs host network for local agent IPC and mDNS
     environment:
       - RUST_LOG=info
-      - DATABASE_URL=postgres://baton:batonpassword@localhost:5432/baton
+      # No DATABASE_URL = uses embedded SQLite (baton.db). Zero config!
+      # To use Postgres instead: DATABASE_URL=postgres://user:pass@host/db
       - REDIS_URL=redis://localhost:6379
-      - JWT_SECRET=${JWT_SECRET:-YOUR_SECURE_SECRET_HERE}
+      - JWT_SECRET=${JWT_SECRET:-your-secure-secret-here-minimum-32-chars-long}
+      - JWT_REFRESH_SECRET=${JWT_REFRESH_SECRET:-your-refresh-secret-here-minimum-32-chars-long}
+      - A2A_ROUTER_URL=ws://127.0.0.1:8080
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
     restart: unless-stopped

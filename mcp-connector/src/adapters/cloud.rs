@@ -10,9 +10,17 @@ pub struct HuggingFaceAdapter;
 #[async_trait]
 impl AgentTransport for HuggingFaceAdapter {
     async fn execute_tool(&self, tool_name: &str, arguments: &Value) -> Result<Value, String> {
+        // Validate model ID: only allow safe alphanumeric/hyphen/slash characters
+        // Prevents path traversal like "../../v1/admin" injected as the model name.
+        if tool_name.is_empty()
+            || tool_name.len() > 200
+            || !tool_name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '/' | '.'))
+            || tool_name.contains("..")
+        {
+            return Err("Invalid model ID format".into());
+        }
+
         info!("HuggingFace Inference: calling model '{}'", tool_name);
-        // tool_name is treated as the model ID on HuggingFace Hub.
-        // TODO: Use reqwest to call https://api-inference.huggingface.co/models/{tool_name}
         let api_key = std::env::var("HUGGINGFACE_API_KEY").unwrap_or_default();
         if api_key.is_empty() {
             return Err("HUGGINGFACE_API_KEY is not configured".into());
@@ -61,6 +69,25 @@ impl AgentTransport for PrivateCloudAdapter {
             .get("endpoint")
             .and_then(|v| v.as_str())
             .ok_or("PrivateCloud requires 'endpoint' in arguments")?;
+
+        // SSRF prevention: only allow https:// endpoints.
+        // Blocks: http://, file://, ftp://, and internal addresses.
+        let parsed_url = reqwest::Url::parse(endpoint)
+            .map_err(|_| "Invalid endpoint URL".to_string())?;
+        if parsed_url.scheme() != "https" {
+            return Err("PrivateCloud endpoint must use https://".into());
+        }
+        // Block access to private/loopback addresses
+        let host = parsed_url.host_str().unwrap_or("");
+        if host == "localhost"
+            || host.starts_with("127.")
+            || host.starts_with("10.")
+            || host.starts_with("192.168.")
+            || host.starts_with("169.254.")
+            || host == "[::1]"
+        {
+            return Err("PrivateCloud endpoint must not target internal addresses".into());
+        }
 
         let client = reqwest::Client::new();
         let resp = client

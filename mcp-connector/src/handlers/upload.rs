@@ -13,6 +13,18 @@ use tracing::{info, warn};
 use crate::auth::validate_access_token;
 use crate::state::AppState;
 
+/// Allowed file extensions (lowercase). Reject anything not on this list.
+const ALLOWED_EXTENSIONS: &[&str] = &[
+    // Documents
+    "pdf", "txt", "md", "csv", "json", "xml",
+    // Images
+    "jpg", "jpeg", "png", "gif", "webp", "svg",
+    // Audio / Video
+    "mp3", "wav", "mp4", "webm",
+    // Archives (benign)
+    "zip",
+];
+
 pub async fn upload_handler(
     headers: HeaderMap,
     State(state): State<Arc<AppState>>,
@@ -35,7 +47,14 @@ pub async fn upload_handler(
 
     let mut uploaded_files = Vec::new();
 
-    while let Some(field) = multipart.next_field().await.unwrap_or(None) {
+    while let Some(field) = match multipart.next_field().await {
+        Ok(Some(f)) => Some(f),
+        Ok(None) => None,
+        Err(e) => {
+            warn!("Multipart parse error: {}", e);
+            return (StatusCode::BAD_REQUEST, Json(json!({"error": "Invalid multipart data"}))).into_response();
+        }
+    } {
         let name = field.name().unwrap_or("unknown").to_string();
         let filename = field.file_name().unwrap_or("file").to_string();
         let content_type = field.content_type().unwrap_or("application/octet-stream").to_string();
@@ -56,7 +75,17 @@ pub async fn upload_handler(
         let ext = std::path::Path::new(&filename)
             .extension()
             .and_then(|s| s.to_str())
-            .unwrap_or("");
+            .map(|e| e.to_lowercase())
+            .unwrap_or_default();
+        
+        // Extension allowlist — reject executables and unknown types
+        if !ext.is_empty() && !ALLOWED_EXTENSIONS.contains(&ext.as_str()) {
+            warn!("Upload rejected: disallowed extension '.{}' from client", ext);
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(json!({"error": format!("File type '.{}' is not allowed", ext)}))
+            ).into_response();
+        }
         
         let safe_filename = if ext.is_empty() {
             file_id.clone()
@@ -82,9 +111,10 @@ pub async fn upload_handler(
         
         info!("File uploaded: {} ({} bytes)", safe_filename, data.len());
 
+        // Never reflect the raw client filename back — could enable downstream XSS.
+        // Instead, return only the safe UUID-based filename and metadata we control.
         uploaded_files.push(json!({
             "field": name,
-            "filename": filename,
             "file_id": file_id,
             "url": format!("/uploads/{}", safe_filename),
             "size": data.len(),

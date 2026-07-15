@@ -12,12 +12,13 @@ pub async fn pair_handler(
     match pair_device(payload, &state).await {
         Ok(res) => (StatusCode::OK, Json(res)).into_response(),
         Err(e) => {
+            // Log the full detail internally; never expose internals to caller.
             tracing::error!("Pairing failed: {}", e);
             (
                 StatusCode::BAD_REQUEST,
-                Json(json!({ "error": e.to_string() })),
+                Json(json!({ "error": "Pairing failed" })),
             )
-                .into_response()
+            .into_response()
         }
     }
 }

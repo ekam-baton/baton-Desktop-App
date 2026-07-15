@@ -5,14 +5,14 @@ use prometheus::{
     register_counter_vec, register_gauge, register_histogram_vec, CounterVec, Gauge, HistogramVec,
 };
 use reqwest::Client;
-use sqlx::PgPool;
+use sqlx::AnyPool;
 
 use crate::config::Config;
 
 /// Central application state, shared across all handlers via `Arc`.
 pub struct AppState {
     pub config: Config,
-    pub db: PgPool,
+    pub db: AnyPool,
     pub http: Client,
 
     // Paired device store: client_id → public key (hex)
@@ -25,10 +25,13 @@ pub struct AppState {
     pub active_connections: Gauge,
     pub provider_errors: CounterVec,
     pub upload_bytes: CounterVec,
+
+    // Active MCP stdio clients
+    pub mcp_clients: Arc<DashMap<String, Arc<crate::adapters::stdio::StdioMcpClient>>>,
 }
 
 impl AppState {
-    pub fn new(config: Config, db: PgPool) -> Self {
+    pub fn new(config: Config, db: AnyPool) -> Self {
         let requests_total = register_counter_vec!(
             "baton_mcp_requests_total",
             "Total MCP requests processed",
@@ -65,7 +68,7 @@ impl AppState {
         .unwrap();
 
         Self {
-            config,
+            config: config.clone(),
             db,
             http: Client::builder()
                 .timeout(std::time::Duration::from_secs(120))
@@ -77,6 +80,14 @@ impl AppState {
             active_connections,
             provider_errors,
             upload_bytes,
+            mcp_clients: {
+                let map = DashMap::new();
+                for (name, (cmd, args)) in &config.mcp_agents {
+                    let client = crate::adapters::stdio::StdioMcpClient::new(cmd.clone(), args.clone());
+                    map.insert(name.clone(), Arc::new(client));
+                }
+                Arc::new(map)
+            },
         }
     }
 }
