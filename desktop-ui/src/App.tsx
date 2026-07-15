@@ -1,49 +1,93 @@
-import { useState } from "react";
-import reactLogo from "./assets/react.svg";
-import { invoke } from "@tauri-apps/api/core";
+import { useState, useEffect } from "react";
 import "./App.css";
 
-function App() {
-  const [greetMsg, setGreetMsg] = useState("");
-  const [name, setName] = useState("");
+interface PendingRequest {
+  client_id: string;
+  device_name: string;
+  public_key_hex: string;
+  requested_at: string;
+}
 
-  async function greet() {
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    setGreetMsg(await invoke("greet", { name }));
-  }
+function App() {
+  const [requests, setRequests] = useState<PendingRequest[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const fetchPending = async () => {
+    try {
+      // In Tauri, we can fetch the local axum server directly
+      const response = await fetch('http://127.0.0.1:8081/admin/api/pending');
+      if (response.ok) {
+        const data = await response.json();
+        setRequests(data);
+      } else if (response.status === 401) {
+        // Handle basic auth prompt or unauthorized state
+        console.error("Unauthorized. Check basic auth credentials.");
+      }
+    } catch (err) {
+      console.error('Error fetching pending requests', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchPending();
+    // Poll every 5 seconds for new requests
+    const interval = setInterval(fetchPending, 5000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const handleAction = async (clientId: string, action: 'approve' | 'deny') => {
+    try {
+      const res = await fetch(`http://127.0.0.1:8081/admin/api/${action}/${encodeURIComponent(clientId)}`, { 
+        method: 'POST' 
+      });
+      if (res.ok) {
+        fetchPending();
+      } else {
+        alert('Action failed: ' + res.status);
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
 
   return (
     <main className="container">
-      <h1>Welcome to Tauri + React</h1>
-
-      <div className="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/vite.svg" className="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img src="/tauri.svg" className="logo tauri" alt="Tauri logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
+      <h1>Baton Connector</h1>
+      <p className="subtitle">Agent Access Control Dashboard</p>
+      
+      <div className="list-container">
+        {loading ? (
+          <div className="empty-state">Loading pending requests...</div>
+        ) : requests.length === 0 ? (
+          <div className="empty-state">No pending authorization requests.</div>
+        ) : (
+          requests.map((req) => (
+            <div key={req.client_id} className="request-card">
+              <div className="info">
+                <div className="client-name">{req.device_name || 'Unknown Device'}</div>
+                <div className="client-pubkey">Key: {req.public_key_hex.substring(0, 16)}...</div>
+                <div className="request-time">Time: {new Date(req.requested_at).toLocaleString()}</div>
+              </div>
+              <div className="actions">
+                <button 
+                  className="btn-approve"
+                  onClick={() => handleAction(req.client_id, 'approve')}
+                >
+                  Approve
+                </button>
+                <button 
+                  className="btn-deny"
+                  onClick={() => handleAction(req.client_id, 'deny')}
+                >
+                  Deny
+                </button>
+              </div>
+            </div>
+          ))
+        )}
       </div>
-      <p>Click on the Tauri, Vite, and React logos to learn more.</p>
-
-      <form
-        className="row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          greet();
-        }}
-      >
-        <input
-          id="greet-input"
-          onChange={(e) => setName(e.currentTarget.value)}
-          placeholder="Enter a name..."
-        />
-        <button type="submit">Greet</button>
-      </form>
-      <p>{greetMsg}</p>
     </main>
   );
 }
