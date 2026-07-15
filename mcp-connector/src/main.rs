@@ -96,8 +96,7 @@ async fn rate_limit_middleware(
     Ok(next.run(req).await)
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+pub async fn run_server() -> anyhow::Result<()> {
     if let Some(proj_dirs) = directories::ProjectDirs::from("com", "ekam", "baton") {
         dotenvy::from_path(proj_dirs.data_dir().join(".env")).ok();
     }
@@ -278,8 +277,10 @@ async fn main() -> anyhow::Result<()> {
         // Admin dashboard
         .route("/admin",       get(handlers::admin::dashboard_handler))
         .route("/admin/api/pending", get(handlers::admin::pending_handler))
+        .route("/admin/api/authorized", get(handlers::admin::authorized_handler))
         .route("/admin/api/approve/{client_id}", post(handlers::admin::approve_handler))
         .route("/admin/api/deny/{client_id}",    post(handlers::admin::deny_handler))
+        .route("/admin/api/revoke/{client_id}",  post(handlers::admin::revoke_handler))
         // Merge sub-routers
         .merge(pair_router)
         .merge(metrics_router)
@@ -356,4 +357,9 @@ async fn shutdown_signal() {
         .await
         .expect("Failed to install CTRL+C handler");
     info!("Shutting down MCP Connector...");
+}
+
+#[tokio::main]
+pub async fn main() -> anyhow::Result<()> {
+    run_server().await
 }

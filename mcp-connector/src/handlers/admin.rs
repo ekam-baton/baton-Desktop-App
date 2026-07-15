@@ -151,3 +151,18 @@ pub async fn deny_handler(
 
     Ok(StatusCode::OK)
 }
+
+pub async fn authorized_handler(headers: axum::http::HeaderMap, axum::extract::State(state): axum::extract::State<std::sync::Arc<crate::state::AppState>>) -> Result<axum::response::Json<Vec<PendingRequest>>, axum::http::StatusCode> {
+    check_auth(&headers, &state.config.admin_password)?;
+    let rows = sqlx::query("SELECT client_id, device_name FROM authorized_users WHERE status = 'approved' ORDER BY created_at DESC LIMIT 200").fetch_all(&state.db).await.map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+    use sqlx::Row;
+    let authorized = rows.iter().map(|row| PendingRequest { client_id: row.get("client_id"), device_name: row.get("device_name") }).collect();
+    Ok(axum::response::Json(authorized))
+}
+
+pub async fn revoke_handler(headers: axum::http::HeaderMap, axum::extract::Path(client_id): axum::extract::Path<String>, axum::extract::State(state): axum::extract::State<std::sync::Arc<crate::state::AppState>>) -> Result<axum::http::StatusCode, axum::http::StatusCode> {
+    check_auth(&headers, &state.config.admin_password)?;
+    if !client_id.chars().all(|c| c.is_ascii_hexdigit()) || client_id.len() > 64 { return Err(axum::http::StatusCode::BAD_REQUEST); }
+    sqlx::query("UPDATE authorized_users SET status = 'revoked' WHERE client_id = ").bind(&client_id).execute(&state.db).await.map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(axum::http::StatusCode::OK)
+}

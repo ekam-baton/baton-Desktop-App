@@ -1136,11 +1136,13 @@ dependencies = [
 name = "desktop-ui"
 version = "0.1.0"
 dependencies = [
+ "mcp-connector",
  "serde",
  "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-opener",
+ "tokio",
 ]
 
 [[package]]
