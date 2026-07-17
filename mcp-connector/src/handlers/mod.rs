@@ -6,3 +6,4 @@ pub mod tools;
 pub mod upload;
 pub mod mcp;
 pub mod admin;
+pub mod features;

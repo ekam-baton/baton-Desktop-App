@@ -18,6 +18,8 @@ pub const ALLOWED_METHODS: &[&str] = &[
     "notifications/initialized",
     "tools/list",
     "tools/call",
+    "kb_add_document",
+    "kb_search",
 ];
 
 impl McpRequest {

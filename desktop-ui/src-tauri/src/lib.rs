@@ -8,6 +8,8 @@ fn greet(name: &str) -> String {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec!["--minimized"])))
         .setup(|app| {
             // Spawn the Axum backend in a separate Tokio runtime
             std::thread::spawn(|| {
@@ -43,6 +45,15 @@ pub fn run() {
                 })
                 .build(app)?;
                 
+            let splash_window = app.get_webview_window("splashscreen").unwrap();
+            let main_window = app.get_webview_window("main").unwrap();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(2500));
+                splash_window.close().unwrap();
+                main_window.show().unwrap();
+                main_window.set_focus().unwrap();
+            });
+
             Ok(())
         })
         .on_window_event(|window, event| {

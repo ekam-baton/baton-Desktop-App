@@ -17,6 +17,8 @@ mod adapters;
 mod handlers;
 pub mod mcp_models;
 pub mod a2a_client;
+mod scheduler;
+pub mod knowledge_base;
 
 use std::{
     net::SocketAddr,
@@ -181,6 +183,12 @@ pub async fn run_server() -> anyhow::Result<()> {
         a2a_client::start_a2a_client(a2a_state, a2a_id).await;
     });
 
+    // ── Scheduler ─────────────────────────────────────────────────────────────
+    let scheduler_state = state.clone();
+    tokio::spawn(async move {
+        scheduler::start_scheduler(scheduler_state).await;
+    });
+
     // ── Owner CLI (Fallback Permissions Management) ────────────────────────────
     let cli_state = state.clone();
     tokio::spawn(async move {
@@ -281,6 +289,17 @@ pub async fn run_server() -> anyhow::Result<()> {
         .route("/admin/api/approve/{client_id}", post(handlers::admin::approve_handler))
         .route("/admin/api/deny/{client_id}",    post(handlers::admin::deny_handler))
         .route("/admin/api/revoke/{client_id}",  post(handlers::admin::revoke_handler))
+        // Features
+        .route("/api/audit", get(handlers::features::get_audit_logs))
+        .route("/api/permissions", get(handlers::features::get_permissions))
+        .route("/api/permissions/{key}", post(handlers::features::update_permission))
+        .route("/api/schedule", get(handlers::features::get_schedule))
+        .route("/api/schedule", post(handlers::features::create_schedule))
+        .route("/api/schedule/{id}", axum::routing::delete(handlers::features::delete_schedule))
+        .route("/api/inbox", get(handlers::features::get_inbox))
+        .route("/api/knowledge", get(handlers::features::get_knowledge))
+        .route("/api/knowledge", post(handlers::features::create_knowledge))
+        .route("/api/handoff", post(handlers::features::handoff_upload))
         // Merge sub-routers
         .merge(pair_router)
         .merge(metrics_router)

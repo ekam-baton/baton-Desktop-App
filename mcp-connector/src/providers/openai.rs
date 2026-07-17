@@ -102,4 +102,42 @@ impl Provider for OpenAiProvider {
         }
         Ok(())
     }
+
+    async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, ProviderError> {
+        let body = json!({
+            "model": "text-embedding-3-small", // Standard fast embedding model
+            "input": texts,
+        });
+
+        let resp = self.client.post(format!("{}/embeddings", self.base_url.trim_end_matches("/chat/completions")))
+            .bearer_auth(&self.api_key)
+            .json(&body)
+            .send().await.map_err(|e| ProviderError::Http(e.to_string()))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status().as_u16();
+            let msg = resp.text().await.unwrap_or_default();
+            return Err(ProviderError::Api { status, message: msg });
+        }
+
+        let mut json: Value = resp.json().await.map_err(|e| ProviderError::Parse(e.to_string()))?;
+        
+        let data = json["data"].as_array_mut().ok_or_else(|| ProviderError::Parse("Missing data array".into()))?;
+        
+        // Ensure they are sorted by index
+        data.sort_by_key(|d| d["index"].as_u64().unwrap_or(0));
+        
+        let mut embeddings = Vec::with_capacity(data.len());
+        for item in data {
+            let vec: Vec<f32> = item["embedding"]
+                .as_array()
+                .ok_or_else(|| ProviderError::Parse("Missing embedding".into()))?
+                .iter()
+                .filter_map(|v| v.as_f64().map(|f| f as f32))
+                .collect();
+            embeddings.push(vec);
+        }
+
+        Ok(embeddings)
+    }
 }

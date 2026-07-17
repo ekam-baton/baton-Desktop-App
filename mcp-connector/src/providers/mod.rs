@@ -24,6 +24,11 @@ pub trait Provider: Send + Sync {
         options: &ChatOptions,
         tx: tokio::sync::mpsc::Sender<Result<String, ProviderError>>,
     ) -> Result<(), ProviderError>;
+
+    /// Generate embeddings for knowledge base chunks.
+    async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, ProviderError> {
+        Err(ProviderError::NotConfigured("Embeddings not supported by this provider".into()))
+    }
 }
 
 /// A chat message with role and content.

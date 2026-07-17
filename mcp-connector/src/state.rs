@@ -28,6 +28,9 @@ pub struct AppState {
 
     // Active MCP stdio clients
     pub mcp_clients: Arc<DashMap<String, Arc<crate::adapters::stdio::StdioMcpClient>>>,
+
+    // Local Vector Search
+    pub knowledge_base: Arc<crate::knowledge_base::KnowledgeBase>,
 }
 
 impl AppState {
@@ -69,7 +72,7 @@ impl AppState {
 
         Self {
             config: config.clone(),
-            db,
+            db: db.clone(),
             http: Client::builder()
                 .timeout(std::time::Duration::from_secs(120))
                 .build()
@@ -80,14 +83,8 @@ impl AppState {
             active_connections,
             provider_errors,
             upload_bytes,
-            mcp_clients: {
-                let map = DashMap::new();
-                for (name, (cmd, args)) in &config.mcp_agents {
-                    let client = crate::adapters::stdio::StdioMcpClient::new(cmd.clone(), args.clone());
-                    map.insert(name.clone(), Arc::new(client));
-                }
-                Arc::new(map)
-            },
+            mcp_clients: Arc::new(DashMap::new()),
+            knowledge_base: Arc::new(crate::knowledge_base::KnowledgeBase::new(db)),
         }
     }
 }

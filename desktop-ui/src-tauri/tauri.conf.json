@@ -13,12 +13,32 @@
     "windows": [
       {
         "title": "Baton",
-        "width": 800,
-        "height": 600
+        "label": "main",
+        "width": 1000,
+        "height": 700,
+        "visible": false
+      },
+      {
+        "title": "",
+        "label": "splashscreen",
+        "url": "/splash.html",
+        "width": 400,
+        "height": 300,
+        "decorations": false,
+        "transparent": true,
+        "center": true,
+        "alwaysOnTop": true
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; connect-src 'self' ws://localhost:* http://localhost:*; img-src 'self' asset: data:; style-src 'self' 'unsafe-inline';"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://raw.githubusercontent.com/ekam/baton/main/updater.json"
+      ]
     }
   },
   "bundle": {
