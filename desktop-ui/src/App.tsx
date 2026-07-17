@@ -85,6 +85,29 @@ function App() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!isLocked) return;
+    
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key >= '0' && e.key <= '9') {
+        if (pin.length < 4) {
+          const newPin = pin + e.key;
+          setPin(newPin);
+          if (newPin === CORRECT_PIN) {
+            setIsLocked(false);
+          } else if (newPin.length === 4) {
+            setTimeout(() => { alert("Incorrect PIN"); setPin(""); }, 10);
+          }
+        }
+      } else if (e.key === 'Backspace' || e.key === 'Delete') {
+        setPin(pin.slice(0, -1));
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isLocked, pin]);
+
   const handleAction = async (clientId: string, action: 'approve' | 'deny' | 'revoke') => {
     try {
       const res = await fetch(`http://127.0.0.1:8081/admin/api/${action}/${encodeURIComponent(clientId)}`, { 
