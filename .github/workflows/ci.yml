@@ -1,0 +1,98 @@
+name: Baton Desktop App CI/CD
+
+on:
+  push:
+    branches: [ "main" ]
+    tags: [ "v*" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  check-rust:
+    name: Check & Test Rust Crates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Check MCP Connector
+        run: cargo check --manifest-path mcp-connector/Cargo.toml
+      - name: Check A2A Router
+        run: cargo check --manifest-path a2a-router/Cargo.toml
+
+  build-tauri-linux:
+    name: Build Desktop Hub (Linux .deb & .AppImage)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Install Desktop UI Dependencies
+        run: |
+          cd desktop-ui
+          npm install
+
+      - name: Build Tauri App (.deb & .AppImage)
+        run: |
+          cd desktop-ui
+          npm run tauri build
+
+      - name: Upload Linux Bundles
+        uses: actions/upload-artifact@v4
+        with:
+          name: baton-desktop-linux
+          path: desktop-ui/src-tauri/target/release/bundle/
+
+  build-tauri-windows:
+    name: Build Desktop Hub (Windows .exe)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Desktop UI Dependencies
+        run: |
+          cd desktop-ui
+          npm install
+
+      - name: Build Tauri App (.exe)
+        run: |
+          cd desktop-ui
+          npm run tauri build
+
+      - name: Upload Windows Bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: baton-desktop-windows
+          path: desktop-ui/src-tauri/target/release/bundle/
+
+  publish-release:
+    name: Publish Release Assets
+    needs: [check-rust, build-tauri-linux, build-tauri-windows]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Create Release & Upload Desktop Installer Assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            baton-desktop-linux/**
+            baton-desktop-windows/**
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
