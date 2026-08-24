@@ -76,9 +76,35 @@ jobs:
           name: baton-desktop-windows
           path: desktop-ui/src-tauri/target/release/bundle/
 
+  build-tauri-macos:
+    name: Build Desktop Hub (macOS .app & .dmg)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Desktop UI Dependencies
+        run: |
+          cd desktop-ui
+          npm install
+
+      - name: Build Tauri App (.app & .dmg)
+        run: |
+          cd desktop-ui
+          npm run tauri build
+
+      - name: Upload macOS Bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: baton-desktop-macos
+          path: desktop-ui/src-tauri/target/release/bundle/
+
   publish-release:
     name: Publish Release Assets
-    needs: [check-rust, build-tauri-linux, build-tauri-windows]
+    needs: [check-rust, build-tauri-linux, build-tauri-windows, build-tauri-macos]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
@@ -91,6 +117,7 @@ jobs:
           files: |
             baton-desktop-linux/**
             baton-desktop-windows/**
+            baton-desktop-macos/**
           draft: false
           prerelease: false
         env:

@@ -170,14 +170,25 @@
     <script>
         // Use the browser's native Basic Auth dialog headers (they are sent automatically once logged in)
         
+        let pollTimer = null;
+        let isUnauthorized = false;
+        
         async function fetchPending() {
+            if (isUnauthorized) return;
             try {
                 const response = await fetch('/admin/api/pending');
                 if (response.ok) {
                     const data = await response.json();
                     renderList(data);
                 } else if (response.status === 401) {
-                    window.location.reload(); // Trigger browser basic auth prompt if token expired
+                    isUnauthorized = true;
+                    if (pollTimer) clearInterval(pollTimer);
+                    const container = document.getElementById('pending-list');
+                    while (container.firstChild) container.removeChild(container.firstChild);
+                    const empty = document.createElement('div');
+                    empty.className = 'empty-state';
+                    empty.textContent = 'Session expired or unauthorized. Please refresh the page to log in.';
+                    container.appendChild(empty);
                 }
             } catch (err) {
                 console.error('Error fetching pending requests', err);
@@ -267,7 +278,7 @@
         fetchPending();
         
         // Poll every 3 seconds
-        setInterval(fetchPending, 3000);
+        pollTimer = setInterval(fetchPending, 3000);
     </script>
 </body>
 </html>

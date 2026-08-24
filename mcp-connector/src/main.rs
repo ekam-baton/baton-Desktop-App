@@ -16,9 +16,12 @@ mod providers;
 mod adapters;
 mod handlers;
 pub mod mcp_models;
+pub mod ratchet;
 pub mod a2a_client;
 mod scheduler;
 pub mod knowledge_base;
+pub mod wasm_sandbox;  // Pillar 4: Wasm MCP Tool Sandbox
+pub mod dlp;           // Pillar 5: Data Loss Prevention Engine
 
 use std::{
     net::SocketAddr,
@@ -190,8 +193,9 @@ pub async fn run_server() -> anyhow::Result<()> {
     });
 
     // ── Owner CLI (Fallback Permissions Management) ────────────────────────────
-    let cli_state = state.clone();
-    tokio::spawn(async move {
+    if std::env::var("BATON_DEV_CLI").unwrap_or_default() == "true" {
+        let cli_state = state.clone();
+        tokio::spawn(async move {
         use tokio::io::{AsyncBufReadExt, BufReader};
         let stdin = tokio::io::stdin();
         let mut reader = BufReader::new(stdin);
@@ -247,6 +251,7 @@ pub async fn run_server() -> anyhow::Result<()> {
             }
         }
     });
+    }
 
     // ── Router ────────────────────────────────────────────────────────────────
 
@@ -272,6 +277,22 @@ pub async fn run_server() -> anyhow::Result<()> {
         .layer(RequestBodyLimitLayer::new(50 * 1024 * 1024)) // 50 MB for uploads
         .with_state(state.clone());
 
+    // Admin sub-router
+    let admin_router = Router::new()
+        .route("/admin", get(handlers::admin::dashboard_handler))
+        .route("/admin/api/pending", get(handlers::admin::pending_handler))
+        .route("/admin/api/authorized", get(handlers::admin::authorized_handler))
+        .route("/admin/api/approve/{client_id}", post(handlers::admin::approve_handler))
+        .route("/admin/api/deny/{client_id}", post(handlers::admin::deny_handler))
+        .route("/admin/api/revoke/{client_id}", post(handlers::admin::revoke_handler))
+        .route("/admin/api/chat", post(handlers::admin::admin_chat_handler))
+        .route("/admin/api/group/create", post(handlers::admin::create_group_handler))
+        .route("/admin/api/groups", get(handlers::admin::list_groups_handler))
+        .route("/admin/api/group/{id}", axum::routing::delete(handlers::admin::delete_group_handler))
+        .route("/admin/api/safety-number/{device_id}", get(handlers::admin::safety_number_handler))
+        .route("/admin/api/vault", post(handlers::admin::upload_vault_handler))
+        .route("/admin/api/vault/{client_id}", get(handlers::admin::download_vault_handler));
+
     let app = Router::new()
         // Health probes (no rate limit needed — used by orchestrators)
         .route("/health", get(handlers::health::health_handler))
@@ -283,12 +304,7 @@ pub async fn run_server() -> anyhow::Result<()> {
         .route("/tools/list",  post(handlers::mcp::tools_list_handler))
         .route("/tools/call",  post(handlers::mcp::tools_call_handler))
         // Admin dashboard
-        .route("/admin",       get(handlers::admin::dashboard_handler))
-        .route("/admin/api/pending", get(handlers::admin::pending_handler))
-        .route("/admin/api/authorized", get(handlers::admin::authorized_handler))
-        .route("/admin/api/approve/{client_id}", post(handlers::admin::approve_handler))
-        .route("/admin/api/deny/{client_id}",    post(handlers::admin::deny_handler))
-        .route("/admin/api/revoke/{client_id}",  post(handlers::admin::revoke_handler))
+        .merge(admin_router)
         // Features
         .route("/api/audit", get(handlers::features::get_audit_logs))
         .route("/api/permissions", get(handlers::features::get_permissions))
@@ -299,7 +315,7 @@ pub async fn run_server() -> anyhow::Result<()> {
         .route("/api/inbox", get(handlers::features::get_inbox))
         .route("/api/knowledge", get(handlers::features::get_knowledge))
         .route("/api/knowledge", post(handlers::features::create_knowledge))
-        .route("/api/handoff", post(handlers::features::handoff_upload))
+        .route("/api/handoff/upload", post(handlers::features::handoff_upload))
         // Merge sub-routers
         .merge(pair_router)
         .merge(metrics_router)
@@ -315,9 +331,31 @@ pub async fn run_server() -> anyhow::Result<()> {
         .layer(TraceLayer::new_for_http())
         .layer(CompressionLayer::new())
         .layer(
-            // Allow local-network origins for mobile app connections.
-            // The mobile app connects from a different IP on the same WiFi network.
-            CorsLayer::permissive()
+            CorsLayer::new()
+                .allow_origin(tower_http::cors::AllowOrigin::predicate(
+                    |origin: &axum::http::HeaderValue, _request_parts: &axum::http::request::Parts| {
+                        if let Ok(origin_str) = origin.to_str() {
+                            origin_str.starts_with("http://localhost:") ||
+                            origin_str.starts_with("http://127.0.0.1:") ||
+                            origin_str == "tauri://localhost" ||
+                            origin_str == "http://localhost" ||
+                            origin_str == "http://127.0.0.1"
+                        } else {
+                            false
+                        }
+                    }
+                ))
+                .allow_methods(vec![
+                    axum::http::Method::GET,
+                    axum::http::Method::POST,
+                    axum::http::Method::PUT,
+                    axum::http::Method::DELETE,
+                    axum::http::Method::OPTIONS,
+                ])
+                .allow_headers(vec![
+                    axum::http::header::CONTENT_TYPE,
+                    axum::http::header::AUTHORIZATION,
+                ])
         );
 
     let addr: SocketAddr = format!("0.0.0.0:{}", config.port).parse()?;
@@ -356,13 +394,12 @@ async fn metrics_auth_middleware(
         .and_then(|v| v.strip_prefix("Bearer "))
         .unwrap_or("");
 
-    // Constant-time comparison to prevent timing oracle.
-    let token_bytes = metrics_token.as_bytes();
-    let provided_bytes = provided.as_bytes();
-    if token_bytes.len() != provided_bytes.len() {
-        return Err(StatusCode::UNAUTHORIZED);
-    }
-    let diff = token_bytes.iter().zip(provided_bytes.iter()).fold(0u8, |acc, (a, b)| acc | (a ^ b));
+    // Hash both tokens to ensure fixed length comparison, preventing length leaks
+    use sha2::{Sha256, Digest};
+    let expected_hash = Sha256::digest(metrics_token.as_bytes());
+    let provided_hash = Sha256::digest(provided.as_bytes());
+    
+    let diff = expected_hash.iter().zip(provided_hash.iter()).fold(0u8, |acc, (a, b)| acc | (a ^ b));
     if diff != 0 {
         return Err(StatusCode::UNAUTHORIZED);
     }

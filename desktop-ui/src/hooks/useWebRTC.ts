@@ -2,9 +2,9 @@ import { useEffect, useRef, useState } from 'react';
 
 // The "Dumb Pipe" envelope structure expected by the Cloud Router
 interface Envelope {
-    destination_id: string;
-    sender_id: string;
-    payload: string; // JSON string containing WebRTC signaling data
+    receiver_id: String;
+    sender_id?: String;
+    payload_encrypted: String; // JSON string containing WebRTC signaling data
 }
 
 type SignalingMessage = 
@@ -21,7 +21,10 @@ export function useWebRTC(localClientId: string, targetPhoneId: string) {
     // Initialize the Signaling WebSocket connection to the Cloud Router
     useEffect(() => {
         // Connect directly to the new Cloud Router Dumb Pipe
-        const ws = new WebSocket(`ws://localhost:3000/relay/${localClientId}`);
+        const WS_BASE = import.meta.env.VITE_ROUTER_URL 
+            ? import.meta.env.VITE_ROUTER_URL.replace('http', 'ws')
+            : 'ws://localhost:3000';
+        const ws = new WebSocket(`${WS_BASE}/relay/${localClientId}`);
         signalingSocket.current = ws;
 
         ws.onmessage = async (event) => {
@@ -42,10 +45,10 @@ export function useWebRTC(localClientId: string, targetPhoneId: string) {
 
     const sendSignalingMessage = (msg: SignalingMessage) => {
         if (signalingSocket.current?.readyState === WebSocket.OPEN) {
-            const envelope: Envelope = {
-                destination_id: targetPhoneId,
+            const envelope = {
+                receiver_id: targetPhoneId,
                 sender_id: localClientId,
-                payload: JSON.stringify(msg)
+                payload_encrypted: JSON.stringify(msg)
             };
             signalingSocket.current.send(JSON.stringify(envelope));
         }
@@ -55,8 +58,9 @@ export function useWebRTC(localClientId: string, targetPhoneId: string) {
         if (peerConnection.current) return peerConnection.current;
 
         const pc = new RTCPeerConnection({
-            iceServers: [
-                { urls: 'stun:stun.l.google.com:19302' } // Free Google STUN server for NAT traversal
+            iceTransportPolicy: (window as any).__BATON_ICE_SERVERS__ ? 'relay' : 'all', // Force TURN to prevent IP leakage (Zero-Click protection)
+            iceServers: (window as any).__BATON_ICE_SERVERS__ || [
+                { urls: 'stun:stun.l.google.com:19302' }
             ]
         });
 

@@ -58,9 +58,16 @@ pub struct Config {
     pub agent_owner_id: String,
     pub agent_owner_name: String,
     
-    // E2EE
+    // E2EE Identity (Ed25519)
+    pub ed25519_private_key: [u8; 32],
+    pub ed25519_public_key: [u8; 32],
+
+    // E2EE ECDH (X25519)
     pub x25519_private_key: [u8; 32],
     pub x25519_public_key: [u8; 32],
+
+    // Queuing
+    pub max_concurrent_chats: u32,
 }
 
 pub fn get_app_data_dir() -> std::path::PathBuf {
@@ -135,7 +142,7 @@ impl Config {
 
             default_provider: env_str("DEFAULT_PROVIDER", "Nvidianim"),
 
-            a2a_router_url: env_str("A2A_ROUTER_URL", "wss://baton-router.ekam.com"),
+            a2a_router_url: env_str("A2A_ROUTER_URL", "wss://baton-router.ekam.com").replace("ws://", "wss://"),
             a2a_router_secret: get_or_create_secret("A2A_ROUTER_SECRET", "baton_a2a_secret.txt"),
             mcp_agents: parse_mcp_agents_from_env(),
             admin_password: get_or_create_admin_password(),
@@ -143,15 +150,23 @@ impl Config {
             agent_owner_id: env_str("AGENT_OWNER_ID", ""),
             agent_owner_name: env_str("AGENT_OWNER_NAME", "Unknown"),
             
+            ed25519_private_key: [0; 32],
+            ed25519_public_key: [0; 32],
             x25519_private_key: [0; 32], // Placeholder, populated below
             x25519_public_key: [0; 32],
+            max_concurrent_chats: env_u32("MAX_CONCURRENT_CHATS", 1),
         };
         
         let (priv_key, pub_key) = get_or_create_x25519_keypair();
         config.x25519_private_key = priv_key;
         config.x25519_public_key = pub_key;
 
+        let (ed_priv_key, ed_pub_key) = get_or_create_ed25519_keypair();
+        config.ed25519_private_key = ed_priv_key;
+        config.ed25519_public_key = ed_pub_key;
+
         // LOW-07 / MED-07: warn loudly if non-TLS WebSocket is configured for A2A.
+        // We already replaced ws:// with wss:// above, but keep warning if someone bypassed it.
         if config.a2a_router_url.starts_with("ws://") {
             tracing::warn!(
                 "SECURITY WARNING: A2A_ROUTER_URL uses insecure ws:// protocol. \
@@ -178,20 +193,27 @@ impl Config {
 fn get_or_create_admin_password() -> String {
     if let Ok(from_env) = std::env::var("ADMIN_PASSWORD") {
         if !from_env.is_empty() {
-            return from_env;
+            use argon2::{password_hash::{rand_core::OsRng, PasswordHasher, SaltString}, Argon2};
+            let salt = SaltString::generate(&mut OsRng);
+            return Argon2::default().hash_password(from_env.as_bytes(), &salt).unwrap().to_string();
         }
     }
-    let path = get_app_data_dir().join("baton_admin_password.txt");
+    let path = get_app_data_dir().join("baton_admin_hash.txt");
     if let Ok(existing) = std::fs::read_to_string(&path) {
-        let pw = existing.trim().to_string();
-        if !pw.is_empty() {
-            return pw;
+        let pw_hash = existing.trim().to_string();
+        if !pw_hash.is_empty() {
+            return pw_hash;
         }
     }
     // Generate a strong 128-bit random password on first run and persist it.
     let new_pw = hex::encode(rand::random::<[u8; 16]>());
-    if let Err(e) = std::fs::write(&path, &new_pw) {
-        eprintln!("WARNING: Could not persist admin password to {}: {}", path.display(), e);
+    
+    use argon2::{password_hash::{rand_core::OsRng, PasswordHasher, SaltString}, Argon2};
+    let salt = SaltString::generate(&mut OsRng);
+    let hash = Argon2::default().hash_password(new_pw.as_bytes(), &salt).unwrap().to_string();
+    
+    if let Err(e) = std::fs::write(&path, &hash) {
+        eprintln!("WARNING: Could not persist admin hash to {}: {}", path.display(), e);
     } else {
         // Set restrictive file permissions on Unix (owner-read-only).
         #[cfg(unix)]
@@ -199,9 +221,9 @@ fn get_or_create_admin_password() -> String {
             use std::os::unix::fs::PermissionsExt;
             let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
         }
-        eprintln!("==> Admin dashboard password saved to: {} (keep this file secure!)", path.display());
+        eprintln!("[BATON] Generated admin password: {}. This will only be shown once.", new_pw);
     }
-    new_pw
+    hash
 }
 
 /// Persist an X25519 keypair for E2EE across restarts.
@@ -233,6 +255,39 @@ fn get_or_create_x25519_keypair() -> ([u8; 32], [u8; 32]) {
     }
     
     (priv_bytes, public.to_bytes())
+}
+
+/// Persist an Ed25519 Identity keypair for E2EE across restarts.
+fn get_or_create_ed25519_keypair() -> ([u8; 32], [u8; 32]) {
+    use ed25519_dalek::{SigningKey, SecretKey};
+    let path = get_app_data_dir().join("baton_ed25519_key.bin");
+    if let Ok(bytes) = std::fs::read(&path) {
+        if bytes.len() == 32 {
+            let mut priv_bytes = [0u8; 32];
+            priv_bytes.copy_from_slice(&bytes);
+            if let Ok(secret) = SecretKey::try_from(priv_bytes) {
+                let signing_key = SigningKey::from_bytes(&secret);
+                return (priv_bytes, signing_key.verifying_key().to_bytes());
+            }
+        }
+    }
+    
+    use rand::rngs::OsRng;
+    let mut csprng = OsRng;
+    let signing_key = SigningKey::generate(&mut csprng);
+    
+    let priv_bytes = signing_key.to_bytes();
+    if let Err(e) = std::fs::write(&path, &priv_bytes) {
+        eprintln!("WARNING: Could not persist Ed25519 key to {}: {}", path.display(), e);
+    } else {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+        }
+    }
+    
+    (priv_bytes, signing_key.verifying_key().to_bytes())
 }
 
 /// Parse MCP agent definitions from environment variables.

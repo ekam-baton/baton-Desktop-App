@@ -74,3 +74,11 @@ mdns-sd = "0.11"
 qrcode = "0.14"
 image = { version = "0.25", default-features = false, features = ["png"] }
 base64 = "0.22"
+
+# WebAssembly tool sandboxing (Pillar 4 — Wasm MCP Sandbox)
+wasmtime = { version = "17.0", features = ["cranelift"] }
+wasmtime-wasi = "17.0"
+wasi-common = "17.0"
+
+# DLP regex engine (Pillar 5 — Data Loss Prevention)
+regex = "1"

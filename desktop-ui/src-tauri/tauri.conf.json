@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Baton",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "identifier": "com.ekam.baton",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -34,13 +34,7 @@
       "csp": "default-src 'self'; connect-src 'self' ws://localhost:* http://localhost:*; img-src 'self' asset: data:; style-src 'self' 'unsafe-inline';"
     }
   },
-  "plugins": {
-    "updater": {
-      "endpoints": [
-        "https://raw.githubusercontent.com/ekam/baton/main/updater.json"
-      ]
-    }
-  },
+  "plugins": {},
   "bundle": {
     "active": true,
     "targets": "all",
@@ -54,6 +48,18 @@
     "windows": {
       "nsis": {
         "installerIcon": "icons/icon.ico"
+      }
+    },
+    "linux": {
+      "deb": {
+        "depends": [
+          "libssl3",
+          "libgtk-3-0",
+          "libwebkit2gtk-4.1-0"
+        ]
+      },
+      "appimage": {
+        "bundleMediaFramework": false
       }
     }
   }

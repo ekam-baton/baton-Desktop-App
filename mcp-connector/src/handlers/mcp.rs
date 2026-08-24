@@ -135,41 +135,7 @@ pub async fn tools_list_handler(
     };
 
     match client.send_request(&payload).await {
-        Ok(mut res) => {
-            // Inject built-in tools into the agent's tool list
-            if let Some(res_map) = res.as_object_mut() {
-                if let Some(result_val) = res_map.get_mut("result") {
-                    if let Some(result_map) = result_val.as_object_mut() {
-                        if let Some(tools_arr) = result_map.get_mut("tools").and_then(|t| t.as_array_mut()) {
-                    tools_arr.push(json!({
-                        "name": "kb_add_document",
-                        "description": "Adds a document to your isolated knowledge base for later RAG retrieval.",
-                        "inputSchema": {
-                            "type": "object",
-                            "properties": {
-                                "title": { "type": "string", "description": "The title of the document." },
-                                "content": { "type": "string", "description": "The plain text content to store and embed." }
-                            },
-                            "required": ["title", "content"]
-                        }
-                    }));
-                    tools_arr.push(json!({
-                        "name": "kb_search",
-                        "description": "Searches your isolated knowledge base using semantic vector search.",
-                        "inputSchema": {
-                            "type": "object",
-                            "properties": {
-                                "query": { "type": "string", "description": "The search query to match against document embeddings." }
-                            },
-                            "required": ["query"]
-                        }
-                    }));
-                }
-            }
-        }
-    }
-    (StatusCode::OK, Json(res)).into_response()
-},
+        Ok(res) => (StatusCode::OK, Json(res)).into_response(),
         Err(e) => {
             tracing::error!("tools/list agent error: {}", e);
             (StatusCode::INTERNAL_SERVER_ERROR, Json(McpResponse::error(payload.id, -32000, "Agent error".into(), None))).into_response()
@@ -290,7 +256,7 @@ async fn handle_kb_tool(
                 
                 if content.is_empty() {
                     let err = McpResponse::error(payload.id.clone(), -32602, "Missing content".into(), None);
-                    let _ = tx.send(Ok(serde_json::to_string(&err).unwrap())).await;
+                    let _ = tx.send(Ok(serde_json::to_string(&err).unwrap_or_else(|_| "{}".into()))).await;
                     return;
                 }
 
@@ -310,7 +276,7 @@ async fn handle_kb_tool(
                         { "type": "text", "text": format!("Successfully indexed {} chunks into Knowledge Base.", added) }
                     ]
                 }));
-                let _ = tx.send(Ok(serde_json::to_string(&res).unwrap())).await;
+                let _ = tx.send(Ok(serde_json::to_string(&res).unwrap_or_else(|_| "{}".into()))).await;
             }
             "kb_search" => {
                 // Parse arguments: { "query": "..." }
@@ -318,7 +284,7 @@ async fn handle_kb_tool(
                 
                 if query.is_empty() {
                     let err = McpResponse::error(payload.id.clone(), -32602, "Missing query".into(), None);
-                    let _ = tx.send(Ok(serde_json::to_string(&err).unwrap())).await;
+                    let _ = tx.send(Ok(serde_json::to_string(&err).unwrap_or_else(|_| "{}".into()))).await;
                     return;
                 }
 
@@ -338,17 +304,17 @@ async fn handle_kb_tool(
                                 { "type": "text", "text": result_text }
                             ]
                         }));
-                        let _ = tx.send(Ok(serde_json::to_string(&res).unwrap())).await;
+                        let _ = tx.send(Ok(serde_json::to_string(&res).unwrap_or_else(|_| "{}".into()))).await;
                     }
                     Err(e) => {
                         let err = McpResponse::error(payload.id.clone(), -32000, format!("Search failed: {}", e), None);
-                        let _ = tx.send(Ok(serde_json::to_string(&err).unwrap())).await;
+                        let _ = tx.send(Ok(serde_json::to_string(&err).unwrap_or_else(|_| "{}".into()))).await;
                     }
                 }
             }
             _ => {
                 let err = McpResponse::method_not_found(payload.id.clone());
-                let _ = tx.send(Ok(serde_json::to_string(&err).unwrap())).await;
+                let _ = tx.send(Ok(serde_json::to_string(&err).unwrap_or_else(|_| "{}".into()))).await;
             }
         }
     });

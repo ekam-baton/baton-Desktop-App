@@ -22,6 +22,7 @@ const MAX_BACKOFF_SECS: u64 = 60;
 pub struct A2aEnvelope {
     pub sender_id: String,
     pub receiver_id: String,
+    pub group_id: Option<String>,
     /// Base64-encoded payload.
     /// NOTE: Real E2EE (X25519 + AES-256-GCM) must be layered on top before launch.
     pub payload_encrypted: String,
@@ -194,9 +195,13 @@ async fn process_envelope(
     use base64::{Engine as _, engine::general_purpose::STANDARD};
     use sqlx::Row;
 
+    if let Some(ref gid) = envelope.group_id {
+        info!("Processing group message for group {}", gid);
+    }
+
     // ── 1. ACL check ─────────────────────────────────────────────────────────
     let auth_record = sqlx::query(
-        "SELECT a.status, p.x25519_public_key 
+        "SELECT a.status, p.x25519_public_key, p.ratchet_state 
          FROM authorized_users a
          JOIN paired_devices p ON a.client_id = p.client_id
          WHERE a.client_id = $1"
@@ -205,13 +210,21 @@ async fn process_envelope(
     .fetch_optional(&state.db).await
     .unwrap_or(None);
 
-    let (is_authorized, sender_x25519_hex) = match auth_record {
+    let (is_authorized, sender_x25519_hex, ratchet_state_enc) = match auth_record {
         Some(r) => {
             let s: String = r.get("status");
-            let pk: Option<String> = r.get("x25519_public_key");
-            (s == "approved", pk.unwrap_or_default())
+            let pk_enc: Option<String> = r.get("x25519_public_key");
+            let rs_enc: Option<String> = r.get("ratchet_state");
+            
+            let pk_dec = if let Some(enc) = pk_enc {
+                crate::auth::decrypt_db_field(&enc, &state.config.jwt_secret).unwrap_or_default()
+            } else {
+                "".to_string()
+            };
+            
+            (s == "approved", pk_dec, rs_enc)
         }
-        None => (false, "".to_string()),
+        None => (false, "".to_string(), None),
     };
 
     if !is_authorized {
@@ -232,18 +245,16 @@ async fn process_envelope(
         return;
     }
 
-    // ── 2. Decode & validate payload (E2EE) ──────────────────────────────────
-    // The payload_encrypted is a JSON containing ciphertext, iv, signature
+    // ── 2. Decode & validate payload (Double Ratchet) ────────────────────────
     #[derive(Deserialize, Serialize)]
-    struct EncryptedPayload {
-        timestamp: String,
-        nonce: String, // Actually UUID without dashes
-        ciphertext: String,
-        iv: String,
-        signature: String,
+    struct RatchetPayload {
+        header_pub: String, // Base64
+        header_n: u32,
+        header_pn: u32,
+        ciphertext: String, // Base64 (IV + Ciphertext)
     }
 
-    let enc_payload_json = match STANDARD.decode(&envelope.payload_encrypted) {
+    let payload_json = match STANDARD.decode(&envelope.payload_encrypted) {
         Ok(b) => match String::from_utf8(b) {
             Ok(s) => s,
             Err(_) => return,
@@ -251,15 +262,15 @@ async fn process_envelope(
         Err(_) => return,
     };
 
-    let enc_payload = match serde_json::from_str::<EncryptedPayload>(&enc_payload_json) {
+    let ratchet_payload = match serde_json::from_str::<RatchetPayload>(&payload_json) {
         Ok(p) => p,
         Err(e) => {
-            error!("Malformed encrypted payload from '{}': {}", envelope.sender_id, e);
+            error!("Malformed ratchet payload from '{}': {}", envelope.sender_id, e);
             return;
         }
     };
 
-    // Derive Shared Secret
+    // Initialize or load RatchetState
     let sender_x25519_bytes = match hex::decode(&sender_x25519_hex) {
         Ok(b) if b.len() == 32 => {
             let mut arr = [0u8; 32];
@@ -273,57 +284,56 @@ async fn process_envelope(
     };
     
     let sender_pub = x25519_dalek::PublicKey::from(sender_x25519_bytes);
-    let my_secret = x25519_dalek::StaticSecret::from(state.config.x25519_private_key);
+    let my_secret_bytes = state.config.x25519_private_key;
+    let my_secret = x25519_dalek::StaticSecret::from(my_secret_bytes);
     let shared_secret = my_secret.diffie_hellman(&sender_pub);
     
-    // Hash shared secret to derive AES key
     use sha2::{Sha256, Digest};
     let mut hasher = Sha256::new();
     hasher.update(shared_secret.as_bytes());
-    let derived_key = hasher.finalize(); // 32 bytes
+    let root_key = hasher.finalize().into(); // 32 bytes
 
-    // Verify HMAC-SHA256 signature
-    use hmac::{Hmac, Mac};
-    type HmacSha256 = Hmac<Sha256>;
-    
-    let mut mac = match HmacSha256::new_from_slice(&derived_key) {
-        Ok(m) => m,
-        Err(e) => {
-            error!("HMAC key error for '{}': {}", envelope.sender_id, e);
-            return;
+    let mut ratchet_state = if let Some(enc) = ratchet_state_enc {
+        let dec_json = crate::auth::decrypt_db_field(&enc, &state.config.jwt_secret).unwrap_or_default();
+        match serde_json::from_str::<crate::ratchet::RatchetState>(&dec_json) {
+            Ok(s) => s,
+            Err(_) => {
+                warn!("Failed to deserialize RatchetState for '{}', re-initializing as Bob.", envelope.sender_id);
+                crate::ratchet::RatchetState::init_bob(root_key, my_secret_bytes)
+            }
         }
+    } else {
+        // First message ever received from this peer, initialize as Bob
+        crate::ratchet::RatchetState::init_bob(root_key, my_secret_bytes)
     };
-    mac.update(enc_payload.ciphertext.as_bytes());
-    mac.update(enc_payload.iv.as_bytes());
-    
-    let expected_sig = STANDARD.encode(mac.finalize().into_bytes());
-    if enc_payload.signature != expected_sig {
-        error!("Signature verification failed for '{}'", envelope.sender_id);
-        return;
-    }
 
-    // Decrypt
-    use aes_gcm::{Aes256Gcm, Key, Nonce, aead::{Aead, KeyInit}};
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&derived_key));
-    
-    let iv_bytes = match STANDARD.decode(&enc_payload.iv) {
-        Ok(b) if b.len() == 12 => b,
+    let hpub_bytes = match STANDARD.decode(&ratchet_payload.header_pub) {
+        Ok(b) if b.len() == 32 => {
+            let mut arr = [0u8; 32];
+            arr.copy_from_slice(&b);
+            arr
+        }
         _ => {
-            error!("Invalid IV from '{}'", envelope.sender_id);
+            error!("Invalid header_pub from '{}'", envelope.sender_id);
             return;
         }
     };
-    let nonce = Nonce::from_slice(&iv_bytes);
-    
-    let ciphertext_bytes = match STANDARD.decode(&enc_payload.ciphertext) {
+
+    let ct_bytes = match STANDARD.decode(&ratchet_payload.ciphertext) {
         Ok(b) => b,
         Err(_) => return,
     };
 
-    let decrypted_bytes = match cipher.decrypt(nonce, ciphertext_bytes.as_ref()) {
+    // Decrypt using Double Ratchet
+    let decrypted_bytes = match ratchet_state.ratchet_decrypt(
+        hpub_bytes,
+        ratchet_payload.header_n,
+        ratchet_payload.header_pn,
+        &ct_bytes
+    ) {
         Ok(b) => b,
         Err(e) => {
-            error!("AES decryption failed for '{}': {}", envelope.sender_id, e);
+            error!("Ratchet decryption failed for '{}': {}", envelope.sender_id, e);
             return;
         }
     };
@@ -333,7 +343,6 @@ async fn process_envelope(
         Err(_) => return,
     };
 
-    // Enforce maximum decoded payload size (256 KB)
     if decrypted_json.len() > 256 * 1024 {
         warn!("A2A payload too large from '{}' — dropping", envelope.sender_id);
         return;
@@ -392,35 +401,31 @@ async fn process_envelope(
         }
     };
 
-    // Generate random 12-byte IV for outbound
-    use rand::RngCore;
-    let mut out_iv_bytes = [0u8; 12];
-    rand::thread_rng().fill_bytes(&mut out_iv_bytes);
-    let out_nonce = Nonce::from_slice(&out_iv_bytes);
-
-    let out_ciphertext = match cipher.encrypt(out_nonce, res_json.as_bytes()) {
-        Ok(c) => c,
+    let (header_pub, header_n, header_pn, out_ciphertext) = match ratchet_state.ratchet_encrypt(res_json.as_bytes()) {
+        Ok(res) => res,
         Err(e) => {
-            error!("Failed to encrypt response for '{}': {}", envelope.sender_id, e);
+            error!("Failed to encrypt response via Double Ratchet: {}", e);
             return;
         }
     };
-
-    let out_ciphertext_b64 = STANDARD.encode(&out_ciphertext);
-    let out_iv_b64 = STANDARD.encode(&out_iv_bytes);
-
-    let mut out_mac = HmacSha256::new_from_slice(&derived_key).unwrap();
-    out_mac.update(out_ciphertext_b64.as_bytes());
-    out_mac.update(out_iv_b64.as_bytes());
-    let out_signature = STANDARD.encode(out_mac.finalize().into_bytes());
-
-    let out_payload = EncryptedPayload {
-        timestamp: chrono::Utc::now().timestamp_millis().to_string(),
-        nonce: uuid::Uuid::new_v4().simple().to_string(),
-        ciphertext: out_ciphertext_b64,
-        iv: out_iv_b64,
-        signature: out_signature,
+    
+    let out_payload = RatchetPayload {
+        header_pub: STANDARD.encode(header_pub),
+        header_n,
+        header_pn,
+        ciphertext: STANDARD.encode(out_ciphertext),
     };
+
+    // Update Ratchet State in DB (Encrypted at rest)
+    if let Ok(new_state_json) = serde_json::to_string(&ratchet_state) {
+        let new_state_enc = crate::auth::encrypt_db_field(&new_state_json, &state.config.jwt_secret).unwrap_or_default();
+        let _ = sqlx::query(
+            "UPDATE paired_devices SET ratchet_state = $1 WHERE client_id = $2"
+        )
+        .bind(new_state_enc)
+        .bind(&envelope.sender_id)
+        .execute(&state.db).await;
+    }
 
     let out_payload_json = match serde_json::to_string(&out_payload) {
         Ok(s) => s,
@@ -433,6 +438,7 @@ async fn process_envelope(
     let response_envelope = A2aEnvelope {
         sender_id: envelope.receiver_id.clone(),
         receiver_id: envelope.sender_id.clone(),
+        group_id: envelope.group_id.clone(),
         payload_encrypted: STANDARD.encode(&out_payload_json),
     };
 

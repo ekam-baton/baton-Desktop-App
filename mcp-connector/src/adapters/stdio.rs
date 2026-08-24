@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -13,10 +14,15 @@ const MAX_LINE_BYTES: u64 = 4 * 1024 * 1024;
 /// Maximum seconds to wait for the agent to respond before timing out.
 const RESPONSE_TIMEOUT_SECS: u64 = 30;
 
+/// Default memory cap for Wasm sandboxed tools (128 MB).
+const WASM_DEFAULT_MEMORY_MB: u64 = 128;
+
 pub struct StdioMcpClient {
     child: Mutex<Option<Child>>,
     cmd: String,
     args: Vec<String>,
+    /// Directories to grant to Wasm tools. Empty = zero FS access.
+    wasm_granted_dirs: Vec<PathBuf>,
 }
 
 impl StdioMcpClient {
@@ -25,6 +31,17 @@ impl StdioMcpClient {
             child: Mutex::new(None),
             cmd,
             args,
+            wasm_granted_dirs: vec![],
+        }
+    }
+
+    /// Create a client with explicit Wasm directory grants.
+    pub fn new_wasm(cmd: String, args: Vec<String>, granted_dirs: Vec<PathBuf>) -> Self {
+        Self {
+            child: Mutex::new(None),
+            cmd,
+            args,
+            wasm_granted_dirs: granted_dirs,
         }
     }
 
@@ -43,6 +60,10 @@ impl StdioMcpClient {
     }
 
     pub async fn ensure_started(&self) -> Result<()> {
+        // Wasm tools are stateless per-call — no persistent child process needed.
+        if self.cmd.ends_with(".wasm") {
+            return Ok(());
+        }
         let mut child_guard = self.child.lock().await;
         if child_guard.is_none() {
             *child_guard = Some(self.spawn_child().await?);
@@ -51,8 +72,38 @@ impl StdioMcpClient {
     }
 
     /// Send a JSON-RPC request to the agent and receive the matching response.
-    /// Enforces line-length and timeout limits to prevent DoS.
+    ///
+    /// For `.wasm` tools: routes through the Wasmtime sandbox (Pillar 4 — V2).
+    /// For native tools: uses the existing stdio subprocess path (unchanged).
     pub async fn send_request(&self, request: &crate::mcp_models::McpRequest) -> Result<Value> {
+        // ── Wasm Sandbox Path (Pillar 4) ────────────────────────────────────
+        if self.cmd.ends_with(".wasm") {
+            let input_json = serde_json::to_string(request)?;
+            info!("🧱 Routing MCP tool through Wasm sandbox: {}", self.cmd);
+
+            let raw_output = crate::wasm_sandbox::run_wasm_tool(
+                &self.cmd,
+                &self.wasm_granted_dirs,
+                WASM_DEFAULT_MEMORY_MB,
+                &input_json,
+            )
+            .await
+            .map_err(|e| anyhow!("Wasm sandbox execution failed: {}", e))?;
+
+            // Parse the first valid JSON-RPC response line from wasm stdout.
+            for line in raw_output.lines() {
+                if let Ok(val) = serde_json::from_str::<Value>(line) {
+                    if let Some(response_id) = val.get("id") {
+                        if response_id == &request.id {
+                            return Ok(val);
+                        }
+                    }
+                }
+            }
+            return Err(anyhow!("Wasm tool produced no matching JSON-RPC response"));
+        }
+
+        // ── Native Subprocess Path (unchanged) ──────────────────────────────
         self.ensure_started().await?;
 
         let mut child_guard = self.child.lock().await;
@@ -60,11 +111,10 @@ impl StdioMcpClient {
         // If the child exited (crash/restart), respawn it.
         let child = child_guard.as_mut().ok_or_else(|| anyhow!("Agent process not running"))?;
         if let Ok(Some(_)) = child.try_wait() {
-            // Process exited — respawn
             *child_guard = Some(self.spawn_child().await?);
         }
 
-        let child = child_guard.as_mut().unwrap();
+        let child = child_guard.as_mut().ok_or_else(|| anyhow!("Agent process not running"))?;
         let stdin = child.stdin.as_mut().ok_or_else(|| anyhow!("No stdin handle"))?;
         let stdout = child.stdout.as_mut().ok_or_else(|| anyhow!("No stdout handle"))?;
 
@@ -82,8 +132,6 @@ impl StdioMcpClient {
             Duration::from_secs(RESPONSE_TIMEOUT_SECS),
             async {
                 loop {
-                    // Use take() to limit how many bytes we buffer per line
-                    // (prevents a misbehaving agent from OOM-ing us)
                     let line = lines.next_line().await?;
                     match line {
                         None => return Err(anyhow!("Agent stdout closed unexpectedly")),
@@ -92,8 +140,6 @@ impl StdioMcpClient {
                                 return Err(anyhow!("Agent response line exceeded {} bytes", MAX_LINE_BYTES));
                             }
                             if let Ok(val) = serde_json::from_str::<Value>(&l) {
-                                // Match on the request id (spec: id can be str or int)
-                                // Compare Value to Value — NOT String to &Value which always fails
                                 let matches = match val.get("id") {
                                     Some(response_id) => response_id == &request.id,
                                     None => false,
@@ -102,7 +148,6 @@ impl StdioMcpClient {
                                     return Ok(val);
                                 }
                             }
-                            // Non-matching line — skip (could be agent log noise, notifications, etc.)
                         }
                     }
                 }
@@ -119,6 +164,5 @@ impl StdioMcpClient {
 impl Drop for StdioMcpClient {
     fn drop(&mut self) {
         // The `kill_on_drop(true)` on the Command handles cleanup.
-        // This explicit note is here for documentation.
     }
 }

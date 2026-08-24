@@ -54,6 +54,25 @@ pub async fn execute_handler(
         claims.sub, payload.tool_name, payload.target_environment
     );
 
+    // ── DLP Pre-Flight: scan tool arguments before executing (Pillar 5) ───
+    let args_str = payload.arguments.to_string();
+    let dlp_violations = state.dlp_engine.scan(&args_str);
+    if !dlp_violations.is_empty() {
+        let labels: Vec<&str> = dlp_violations.iter().map(|v| v.label).collect();
+        tracing::warn!(
+            "🛡️ DLP BLOCK: tool '{}' arguments contain sensitive data patterns: {:?}. Request blocked.",
+            payload.tool_name, labels
+        );
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({
+                "error": "DLP Policy Violation",
+                "detail": format!("Request blocked: potential sensitive data detected ({}).", labels.join(", ")),
+                "patterns": labels,
+            }))
+        ).into_response();
+    }
+
     let transport = match get_adapter(&payload.target_environment, payload.credentials) {
         Ok(t) => t,
         Err(e) => {
@@ -66,7 +85,12 @@ pub async fn execute_handler(
     };
 
     let result = match transport.execute_tool(&payload.tool_name, &payload.arguments).await {
-        Ok(res) => res,
+        Ok(res) => {
+            if res.get("status").and_then(|s| s.as_str()) == Some("not_available") {
+                return (StatusCode::NOT_IMPLEMENTED, Json(res)).into_response();
+            }
+            res
+        },
         Err(e) => {
             state.provider_errors.with_label_values(&[&payload.target_environment, "execute_error"]).inc();
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))).into_response();
@@ -100,6 +124,29 @@ pub async fn chat_handler(
     };
 
     info!("Streaming chat via provider: {}", provider.name());
+
+    // ── DLP Pre-Flight: scan all message content before calling LLM (Pillar 5) ──
+    let combined_prompt: String = payload.messages.iter()
+        .map(|m| m.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let dlp_violations = state.dlp_engine.scan(&combined_prompt);
+    if !dlp_violations.is_empty() {
+        let labels: Vec<&str> = dlp_violations.iter().map(|v| v.label).collect();
+        tracing::warn!(
+            "🛡️ DLP BLOCK: chat prompt to '{}' contains sensitive data patterns: {:?}. Request blocked.",
+            provider_name, labels
+        );
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({
+                "error": "DLP Policy Violation",
+                "detail": format!("Request blocked: potential sensitive data detected ({}).", labels.join(", ")),
+                "patterns": labels,
+            }))
+        ).into_response();
+    }
+
     let (tx, mut rx) = mpsc::channel(100);
     
     let options = payload.options.unwrap_or_default();
@@ -110,7 +157,15 @@ pub async fn chat_handler(
     state.active_connections.inc();
     state.requests_total.with_label_values(&[provider_label, "success"]).inc();
 
+    let permit = match state.llm_concurrency_limiter.clone().acquire_owned().await {
+        Ok(p) => p,
+        Err(_) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "Failed to acquire concurrency permit"}))).into_response();
+        }
+    };
+
     tokio::spawn(async move {
+        let _permit = permit;
         if let Err(e) = provider.chat_stream(&messages, &options, tx.clone()).await {
             error!("Stream error: {}", e);
             let _ = tx.send(Err(e)).await;

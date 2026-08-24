@@ -44,7 +44,12 @@ shell-words = "1.1"
 x25519-dalek = { version = "2.0.0", features = ["static_secrets"] }
 hmac = "0.12.1"
 directories = "6.0.0"
+hkdf = "0.12.4"
+wasi-common = { workspace = true }
+wasmtime = { workspace = true }
+wasmtime-wasi = { workspace = true }
+regex = { workspace = true }
+argon2 = "0.5.3"
 
 [lib]
 path = "src/main.rs"
-

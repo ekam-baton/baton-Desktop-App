@@ -1,7 +1,7 @@
 {
   "name": "desktop-ui",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.3.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -11,15 +11,21 @@
     "security-scan": "npm audit && eslint src --ext .ts,.tsx"
   },
   "dependencies": {
+    "@matrix-org/olm": "^3.2.15",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-autostart": "^2.5.1",
     "@tauri-apps/plugin-notification": "^2.3.3",
     "@tauri-apps/plugin-opener": "^2",
     "@types/dompurify": "^3.0.5",
+    "@types/react-syntax-highlighter": "^15.5.13",
     "dompurify": "^3.4.12",
     "lucide-react": "^1.25.0",
     "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "react-dom": "^19.1.0",
+    "react-markdown": "^10.1.0",
+    "react-router-dom": "^7.18.2",
+    "react-syntax-highlighter": "^16.1.1",
+    "sonner": "^2.0.7"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

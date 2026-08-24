@@ -69,7 +69,7 @@ impl Config {
             redis_url: std::env::var("REDIS_URL")
                 .unwrap_or_else(|_| "redis://127.0.0.1:6379".into()),
             database_url: std::env::var("DATABASE_URL")
-                .unwrap_or_else(|_| "postgres://baton:batonpassword@localhost:5432/baton".into()),
+                .expect("DATABASE_URL environment variable must be set"),
         }
     }
 }
@@ -254,11 +254,9 @@ async fn internal_forward_handler(
         }
     }
     // If not connected locally, it means they disconnected between the redis lookup and the HTTP call.
-    // Fallback: save to offline queue.
-    if let Err(e) = save_offline_message(&state.pg_pool, &msg).await {
-        error!("Failed to save offline message during forward fallback: {}", e);
-        return StatusCode::INTERNAL_SERVER_ERROR;
-    }
+    // Drop message (zero-knowledge policy: zero server payload storage)
+    tracing::info!("Peer {} disconnected before forward completion — dropping unroutable message", msg.receiver_id);
+    state.messages_routed.with_label_values(&["dropped_offline"]).inc();
     
     StatusCode::ACCEPTED
 }
@@ -413,65 +411,18 @@ async fn route_message(msg: A2AMessage, state: &Arc<AppState>) {
         }
     }
 
-    // 3. If not routed remotely (either offline, or forward failed), queue it
+    // 3. If not routed remotely (either offline, or forward failed), record metric without storing payload
     if !routed_remote {
-        if let Err(e) = save_offline_message(&state.pg_pool, &msg).await {
-            error!("Failed to save offline message: {}", e);
-            state.errors_total.with_label_values(&["offline_queue_err"]).inc();
-        } else {
-            state.messages_routed.with_label_values(&["queued_offline"]).inc();
-        }
+        tracing::info!("Peer {} is offline — dropping unroutable message (zero-knowledge policy: zero server payload storage)", msg.receiver_id);
+        state.messages_routed.with_label_values(&["dropped_offline"]).inc();
     }
 }
 
 // ─── Database Helpers ────────────────────────────────────────────────────────
 
-async fn save_offline_message(pool: &PgPool, msg: &A2AMessage) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "INSERT INTO offline_messages (id, receiver_id, sender_id, payload) VALUES ($1, $2, $3, $4)",
-    )
-    .bind(Uuid::new_v4())
-    .bind(&msg.receiver_id)
-    .bind(&msg.sender_id)
-    .bind(&msg.payload)
-    .execute(pool)
-    .await?;
-    Ok(())
-}
-
-async fn fetch_and_delete_offline_messages(pool: &PgPool, receiver_id: &str) -> Result<Vec<A2AMessage>, sqlx::Error> {
-    use sqlx::Row;
-    let records = sqlx::query(
-        "SELECT id, sender_id, payload FROM offline_messages WHERE receiver_id = $1 ORDER BY created_at ASC",
-    )
-    .bind(receiver_id)
-    .fetch_all(pool)
-    .await?;
-
-    let mut msgs = Vec::new();
-    let mut ids = Vec::new();
-
-    for r in records {
-        let r_id: Uuid = r.get("id");
-        let r_sender_id: String = r.get("sender_id");
-        let r_payload: serde_json::Value = r.get("payload");
-
-        msgs.push(A2AMessage {
-            sender_id: r_sender_id,
-            receiver_id: receiver_id.to_string(),
-            payload: r_payload,
-        });
-        ids.push(r_id);
-    }
-
-    if !ids.is_empty() {
-        sqlx::query("DELETE FROM offline_messages WHERE id = ANY($1)")
-            .bind(&ids)
-            .execute(pool)
-            .await?;
-    }
-
-    Ok(msgs)
+// Zero-Knowledge Policy: No payload storage in DB.
+async fn fetch_and_delete_offline_messages(_pool: &PgPool, _receiver_id: &str) -> Result<Vec<A2AMessage>, sqlx::Error> {
+    Ok(Vec::new())
 }
 
 // ─── Security Helpers ────────────────────────────────────────────────────────
@@ -493,7 +444,7 @@ fn validate_jwt(token: &str, secret: &str) -> Result<Claims, jsonwebtoken::error
 fn mint_jwt(client_id: &str, secret: &str) -> Result<String, jsonwebtoken::errors::Error> {
     let expiration = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or_default()
         .as_secs() as usize
         + 3600; // 1 hour token
 

@@ -7,7 +7,59 @@ use ed25519_dalek::VerifyingKey;
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 
+use aes_gcm::{Aes256Gcm, Key, Nonce, aead::{Aead, KeyInit}};
+use rand::RngCore;
+use sha2::{Sha256, Digest};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+
 use crate::state::AppState;
+
+pub fn encrypt_db_field(plaintext: &str, master_secret: &str) -> anyhow::Result<String> {
+    if plaintext.is_empty() { return Ok(String::new()); }
+    
+    let hk = hkdf::Hkdf::<Sha256>::new(None, master_secret.as_bytes());
+    let mut derived_key = [0u8; 32];
+    hk.expand(b"baton_db_encryption", &mut derived_key).map_err(|_| anyhow!("HKDF expand failed"))?;
+
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&derived_key));
+    let mut iv = [0u8; 12];
+    rand::thread_rng().fill_bytes(&mut iv);
+    let nonce = Nonce::from_slice(&iv);
+
+    let ciphertext = cipher.encrypt(nonce, plaintext.as_bytes())
+        .map_err(|e| anyhow::anyhow!("Encryption failed: {}", e))?;
+
+    let mut combined = iv.to_vec();
+    combined.extend(ciphertext);
+    Ok(STANDARD.encode(&combined))
+}
+
+pub fn decrypt_db_field(ciphertext_b64: &str, master_secret: &str) -> anyhow::Result<String> {
+    if ciphertext_b64.is_empty() { return Ok(String::new()); }
+    
+    let combined = match STANDARD.decode(ciphertext_b64) {
+        Ok(c) => c,
+        Err(_) => return Ok(ciphertext_b64.to_string()),
+    };
+    if combined.len() < 12 { return Ok(ciphertext_b64.to_string()); }
+
+    let hk = hkdf::Hkdf::<Sha256>::new(None, master_secret.as_bytes());
+    let mut derived_key = [0u8; 32];
+    hk.expand(b"baton_db_encryption", &mut derived_key).map_err(|_| anyhow!("HKDF failed"))?;
+
+    let (iv, ciphertext) = combined.split_at(12);
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&derived_key));
+    let nonce = Nonce::from_slice(iv);
+
+    let plaintext = match cipher.decrypt(nonce, ciphertext) {
+        Ok(p) => p,
+        Err(_) => return Err(anyhow::anyhow!("Decryption failed")),
+    };
+
+    let result = String::from_utf8(plaintext).map_err(|_| anyhow::anyhow!("Invalid UTF-8"))?;
+    Ok(result)
+}
+
 
 // ─── JWT Claims ──────────────────────────────────────────────────────────────
 
@@ -45,6 +97,7 @@ pub struct PairResponse {
     pub agent_owner_id: String,
     pub agent_owner_name: String,
     pub x25519_public_key: String,
+    pub ed25519_public_key: String,
 }
 
 // ─── Pairing logic ────────────────────────────────────────────────────────────
@@ -72,8 +125,10 @@ pub async fn pair_device(
     // Cap device_name to prevent oversized DB writes and XSS amplification.
     let raw_name = req.device_name.unwrap_or_else(|| "Baton Device".into());
     let device_name: String = raw_name.chars().take(128).collect();
+    let enc_device_name = encrypt_db_field(&device_name, &state.config.jwt_secret).unwrap_or(device_name.clone());
 
     let x25519_pub = req.x25519_public_key.unwrap_or_else(|| "".to_string());
+    let enc_x25519_pub = encrypt_db_field(&x25519_pub, &state.config.jwt_secret).unwrap_or(x25519_pub);
 
     // Persist to DB
     sqlx::query(
@@ -88,8 +143,8 @@ pub async fn pair_device(
     )
     .bind(&client_id)
     .bind(&req.public_key)
-    .bind(&device_name)
-    .bind(&x25519_pub)
+    .bind(&enc_device_name)
+    .bind(&enc_x25519_pub)
     .execute(&state.db)
     .await
     .map_err(|e| anyhow!("DB error during pairing: {}", e))?;
@@ -124,6 +179,7 @@ pub async fn pair_device(
         agent_owner_id: state.config.agent_owner_id.clone(),
         agent_owner_name: state.config.agent_owner_name.clone(),
         x25519_public_key: hex::encode(&state.config.x25519_public_key),
+        ed25519_public_key: hex::encode(&state.config.ed25519_public_key),
     })
 }
 

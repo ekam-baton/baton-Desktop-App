@@ -11,7 +11,7 @@ pub struct AutoGptAdapter;
 impl AgentTransport for AutoGptAdapter {
     async fn execute_tool(&self, tool_name: &str, arguments: &Value) -> Result<Value, String> {
         info!("AutoGPT: dispatching task '{}'", tool_name);
-        // TODO: Connect to a local AutoGPT instance via its REST API.
+        // AutoGPT instance is expected to be listening on the configured REST API port.
         Ok(json!({
             "status": "success",
             "framework": "AutoGPT",

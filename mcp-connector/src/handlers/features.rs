@@ -1,12 +1,13 @@
 use axum::{
     extract::{Path, State, Multipart},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::IntoResponse,
     Json,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use crate::state::AppState;
+use crate::handlers::admin::check_auth;
 
 #[derive(Serialize, sqlx::FromRow)]
 pub struct AuditLog {
@@ -59,6 +60,7 @@ pub struct KnowledgeDir {
 }
 
 pub async fn get_audit_logs(
+    headers: HeaderMap,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<AuditLog>>, StatusCode> {
     let logs = sqlx::query_as::<_, AuditLog>(
@@ -74,6 +76,7 @@ pub async fn get_audit_logs(
 }
 
 pub async fn get_permissions(
+    headers: HeaderMap,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<Permission>>, StatusCode> {
     let perms = sqlx::query_as::<_, Permission>(
@@ -86,6 +89,7 @@ pub async fn get_permissions(
 }
 
 pub async fn update_permission(
+    headers: HeaderMap,
     State(state): State<Arc<AppState>>,
     Path(key): Path<String>,
     Json(payload): Json<UpdatePermissionReq>,
@@ -108,6 +112,7 @@ pub async fn update_permission(
 }
 
 pub async fn get_schedule(
+    headers: HeaderMap,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<ScheduledTask>>, StatusCode> {
     let tasks = sqlx::query_as::<_, ScheduledTask>(
@@ -120,6 +125,7 @@ pub async fn get_schedule(
 }
 
 pub async fn create_schedule(
+    headers: HeaderMap,
     State(state): State<Arc<AppState>>,
     Json(payload): Json<CreateTaskReq>,
 ) -> Result<StatusCode, StatusCode> {
@@ -141,6 +147,7 @@ pub async fn create_schedule(
 }
 
 pub async fn delete_schedule(
+    headers: HeaderMap,
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> Result<StatusCode, StatusCode> {
@@ -153,6 +160,7 @@ pub async fn delete_schedule(
 }
 
 pub async fn get_inbox(
+    headers: HeaderMap,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<InboxFile>>, StatusCode> {
     let files = sqlx::query_as::<_, InboxFile>(
@@ -170,6 +178,7 @@ pub struct CreateKnowledgeReq {
 }
 
 pub async fn create_knowledge(
+    headers: HeaderMap,
     State(state): State<Arc<AppState>>,
     Json(payload): Json<CreateKnowledgeReq>,
 ) -> Result<StatusCode, StatusCode> {
@@ -195,6 +204,7 @@ pub async fn create_knowledge(
 }
 
 pub async fn get_knowledge(
+    headers: HeaderMap,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<KnowledgeDir>>, StatusCode> {
     let dirs = sqlx::query_as::<_, KnowledgeDir>(
@@ -207,19 +217,40 @@ pub async fn get_knowledge(
 }
 
 pub async fn handoff_upload(
+    headers: HeaderMap,
     State(state): State<Arc<AppState>>,
     mut multipart: Multipart,
 ) -> Result<StatusCode, StatusCode> {
+    check_auth(&headers, &state.config.admin_password)?;
     let mut file_count = 0;
+    
+    // Determine inbox directory path
+    let inbox_dir = if let Some(proj_dirs) = directories::ProjectDirs::from("com", "ekam", "baton") {
+        proj_dirs.data_local_dir().join("inbox")
+    } else {
+        std::env::temp_dir().join("baton_inbox")
+    };
+    
+    // Create the directory if it doesn't exist
+    let _ = tokio::fs::create_dir_all(&inbox_dir).await;
+
     while let Some(field) = multipart.next_field().await.unwrap_or(None) {
-        let name = field.name().unwrap_or("").to_string();
-        let file_name = field.file_name().unwrap_or("unknown").to_string();
-        let _data = field.bytes().await.unwrap_or_default();
+        let _name = field.name().unwrap_or("").to_string();
+        let raw_name = field.file_name().unwrap_or("unknown").to_string();
+        let safe_name = std::path::Path::new(&raw_name).file_name().and_then(|n| n.to_str()).unwrap_or("unknown_file").to_string();
+        let data = field.bytes().await.unwrap_or_default();
+        
+        if !data.is_empty() {
+            let file_path = inbox_dir.join(&safe_name);
+            if let Err(e) = tokio::fs::write(&file_path, &data).await {
+                tracing::error!("Failed to write inbox file to disk: {}", e);
+            }
+        }
         
         file_count += 1;
         
         sqlx::query("INSERT INTO inbox_files (file_name, sender) VALUES ($1, 'Desktop Handoff')")
-            .bind(&file_name)
+            .bind(&safe_name)
             .execute(&state.db)
             .await
             .ok();

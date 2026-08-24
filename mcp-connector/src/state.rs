@@ -31,6 +31,12 @@ pub struct AppState {
 
     // Local Vector Search
     pub knowledge_base: Arc<crate::knowledge_base::KnowledgeBase>,
+
+    // Queue for LLM concurrency limit
+    pub llm_concurrency_limiter: Arc<tokio::sync::Semaphore>,
+
+    // DLP Engine: blocks sensitive data from leaking to external LLMs (Pillar 5 — V2)
+    pub dlp_engine: Arc<crate::dlp::DlpEngine>,
 }
 
 impl AppState {
@@ -40,7 +46,7 @@ impl AppState {
             "Total MCP requests processed",
             &["provider", "status"]
         )
-        .unwrap();
+        .expect("Failed to register Prometheus requests metric");
 
         let streaming_duration = register_histogram_vec!(
             "baton_mcp_streaming_duration_seconds",
@@ -48,27 +54,27 @@ impl AppState {
             &["provider"],
             vec![0.1, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0]
         )
-        .unwrap();
+        .expect("Failed to register Prometheus streaming metric");
 
         let active_connections = register_gauge!(
             "baton_mcp_active_connections",
             "Number of active streaming connections"
         )
-        .unwrap();
+        .expect("Failed to register Prometheus active connections metric");
 
         let provider_errors = register_counter_vec!(
             "baton_mcp_provider_errors_total",
             "Total errors per provider",
             &["provider", "error_kind"]
         )
-        .unwrap();
+        .expect("Failed to register Prometheus provider errors metric");
 
         let upload_bytes = register_counter_vec!(
             "baton_mcp_upload_bytes_total",
             "Total bytes uploaded",
             &["mime_type"]
         )
-        .unwrap();
+        .expect("Failed to register Prometheus upload metric");
 
         Self {
             config: config.clone(),
@@ -76,7 +82,7 @@ impl AppState {
             http: Client::builder()
                 .timeout(std::time::Duration::from_secs(120))
                 .build()
-                .unwrap(),
+                .expect("Failed to initialize internal reqwest HTTP client"),
             paired_devices: Arc::new(DashMap::new()),
             requests_total,
             streaming_duration,
@@ -85,6 +91,8 @@ impl AppState {
             upload_bytes,
             mcp_clients: Arc::new(DashMap::new()),
             knowledge_base: Arc::new(crate::knowledge_base::KnowledgeBase::new(db)),
+            llm_concurrency_limiter: Arc::new(tokio::sync::Semaphore::new(config.max_concurrent_chats as usize)),
+            dlp_engine: Arc::new(crate::dlp::DlpEngine::new()),
         }
     }
 }

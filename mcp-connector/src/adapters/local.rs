@@ -10,16 +10,10 @@ pub struct OpenClawAdapter;
 
 #[async_trait]
 impl AgentTransport for OpenClawAdapter {
-    async fn execute_tool(&self, tool_name: &str, arguments: &Value) -> Result<Value, String> {
-        info!("OpenClaw: executing tool '{}'", tool_name);
-        // TODO: Connect via named pipe / IPC to the local OpenClaw harness.
-        // For now, returns a structured stub response.
+    async fn execute_tool(&self, _tool_name: &str, _arguments: &Value) -> Result<Value, String> {
         Ok(json!({
-            "status": "success",
-            "harness": "OpenClaw",
-            "tool": tool_name,
-            "arguments": arguments,
-            "result": "Tool dispatched to local OpenClaw harness."
+            "error": "This adapter is not yet implemented. It will be available in a future release.",
+            "status": "not_available"
         }))
     }
 }
@@ -28,14 +22,10 @@ pub struct HermesAdapter;
 
 #[async_trait]
 impl AgentTransport for HermesAdapter {
-    async fn execute_tool(&self, tool_name: &str, arguments: &Value) -> Result<Value, String> {
-        info!("Hermes: executing workflow '{}'", tool_name);
+    async fn execute_tool(&self, _tool_name: &str, _arguments: &Value) -> Result<Value, String> {
         Ok(json!({
-            "status": "success",
-            "harness": "Hermes",
-            "tool": tool_name,
-            "arguments": arguments,
-            "result": "Workflow dispatched to local Hermes harness."
+            "error": "This adapter is not yet implemented. It will be available in a future release.",
+            "status": "not_available"
         }))
     }
 }
@@ -44,14 +34,10 @@ pub struct NemoClawAdapter;
 
 #[async_trait]
 impl AgentTransport for NemoClawAdapter {
-    async fn execute_tool(&self, tool_name: &str, arguments: &Value) -> Result<Value, String> {
-        info!("NemoClaw: executing tool '{}'", tool_name);
+    async fn execute_tool(&self, _tool_name: &str, _arguments: &Value) -> Result<Value, String> {
         Ok(json!({
-            "status": "success",
-            "harness": "NemoClaw",
-            "tool": tool_name,
-            "arguments": arguments,
-            "result": "Tool dispatched to local NemoClaw harness."
+            "error": "This adapter is not yet implemented. It will be available in a future release.",
+            "status": "not_available"
         }))
     }
 }
