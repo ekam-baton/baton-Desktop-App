@@ -27,7 +27,7 @@ export const KnowledgeBaseSettings = () => {
       } else {
         toast.error('Failed to index directory');
       }
-    } catch (err) {
+    } catch {
       toast.error('Network error while indexing');
     }
   };

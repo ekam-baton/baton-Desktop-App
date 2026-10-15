@@ -1,10 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
 
+declare global {
+    interface Window {
+        __BATON_ICE_SERVERS__?: RTCIceServer[];
+    }
+}
+
 // The "Dumb Pipe" envelope structure expected by the Cloud Router
 export interface Envelope {
-    receiver_id: String;
-    sender_id?: String;
-    payload_encrypted: String; // JSON string containing WebRTC signaling data
+    receiver_id: string;
+    sender_id?: string;
+    payload_encrypted: string; // JSON string containing WebRTC signaling data
 }
 
 type SignalingMessage = 
@@ -58,8 +64,8 @@ export function useWebRTC(localClientId: string, targetPhoneId: string) {
         if (peerConnection.current) return peerConnection.current;
 
         const pc = new RTCPeerConnection({
-            iceTransportPolicy: (window as any).__BATON_ICE_SERVERS__ ? 'relay' : 'all', // Force TURN to prevent IP leakage (Zero-Click protection)
-            iceServers: (window as any).__BATON_ICE_SERVERS__ || [
+            iceTransportPolicy: window.__BATON_ICE_SERVERS__ ? 'relay' : 'all', // Force TURN to prevent IP leakage (Zero-Click protection)
+            iceServers: window.__BATON_ICE_SERVERS__ || [
                 { urls: 'stun:stun.l.google.com:19302' }
             ]
         });

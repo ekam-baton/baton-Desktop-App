@@ -30,7 +30,7 @@ export const HandoffSettings = () => {
       } else {
         toast.error('Failed to push context');
       }
-    } catch (err) {
+    } catch {
       toast.error('Network error during upload');
     }
   };

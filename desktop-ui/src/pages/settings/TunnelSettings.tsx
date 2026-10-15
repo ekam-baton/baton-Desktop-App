@@ -15,7 +15,7 @@ export const TunnelSettings = () => {
     try {
       await invoke('set_env', { updates: envConfig });
       toast.success("Tunnel configuration saved! Please restart the app.", { duration: 8000 });
-    } catch(err) {
+    } catch {
       toast.error("Failed to save configuration");
     }
   };

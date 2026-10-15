@@ -74,7 +74,7 @@ export const GeneralSettings = () => {
             try {
               await invoke('set_env', { updates: envConfig });
               toast.success("Configuration saved! Please restart the app for changes to take effect.", { duration: 8000 });
-            } catch(err) {
+            } catch {
               toast.error("Failed to save configuration");
             }
           }}

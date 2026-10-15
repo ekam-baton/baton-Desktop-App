@@ -31,7 +31,7 @@ export const GroupsSettings = () => {
       } else {
         toast.error('Failed to create group');
       }
-    } catch (err) {
+    } catch {
       toast.error('Network error while creating group');
     }
   };
@@ -48,7 +48,7 @@ export const GroupsSettings = () => {
       } else {
         toast.error('Failed to delete group');
       }
-    } catch (err) {
+    } catch {
       toast.error('Network error');
     }
   };

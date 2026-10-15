@@ -50,13 +50,12 @@ const dataUriToBlob = (dataUri: string): Blob => {
     meta.match(/data:([^;]+)/i)?.[1]?.toLowerCase() ??
     "application/octet-stream";
   if (!/;base64/i.test(meta)) {
-    const text = data.replace(/(?:%[0-9A-Fa-f]{2})+/g, (seq) => {
-      try {
-        return decodeURIComponent(seq);
-      } catch {
-        return seq;
-      }
-    });
+    let text = data;
+    try {
+      text = decodeURIComponent(data);
+    } catch {
+      // Keep raw data if URI decoding fails
+    }
     return new Blob([text], { type: mime });
   }
   const bytes = atob(data);
@@ -384,6 +383,7 @@ function RegenerateButton({
         try {
           await onRegenerate();
         } catch {
+          // Ignore regeneration failure
         } finally {
           setIsRegenerating(false);
         }

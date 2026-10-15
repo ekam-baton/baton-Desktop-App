@@ -17,7 +17,7 @@ export const ChatPage = () => {
     if (saved) {
       try {
         return JSON.parse(saved);
-      } catch (e) {
+      } catch {
         return [];
       }
     }
@@ -76,7 +76,7 @@ export const ChatPage = () => {
           }
         }
       }
-    } catch (err) {
+    } catch {
       toast.error("Failed to communicate with agent.");
     }
   };
@@ -116,14 +116,20 @@ export const ChatPage = () => {
                   msg.role === 'agent' ? (
                     <ReactMarkdown
                       components={{
-                        code({node, inline, className, children, ...props}: any) {
-                          const match = /language-(\w+)/.exec(className || '')
+                        code({ inline, className, children, ...props }: React.ComponentPropsWithoutRef<'code'> & { inline?: boolean }) {
+                          const restCodeProps: Record<string, unknown> = {};
+                          for (const [key, val] of Object.entries(props)) {
+                            if (key !== 'node' && key !== 'style') {
+                              restCodeProps[key] = val;
+                            }
+                          }
+                          const match = /language-(\w+)/.exec(className || '');
                           return !inline && match ? (
                             <SyntaxHighlighter
-                              style={vscDarkPlus as any}
+                              style={vscDarkPlus as unknown as { [key: string]: React.CSSProperties }}
                               language={match[1]}
                               PreTag="div"
-                              {...props}
+                              {...restCodeProps}
                             >
                               {String(children).replace(/\n$/, '')}
                             </SyntaxHighlighter>
@@ -131,7 +137,7 @@ export const ChatPage = () => {
                             <code className={className} {...props}>
                               {children}
                             </code>
-                          )
+                          );
                         }
                       }}
                     >

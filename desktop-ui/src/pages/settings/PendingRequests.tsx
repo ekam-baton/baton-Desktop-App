@@ -51,7 +51,7 @@ export const PendingRequests = () => {
                       } else {
                         toast.error('Could not compute Safety Number (missing identity keys?)');
                       }
-                    } catch (e) {
+                    } catch {
                       toast.error('Network error fetching Safety Number');
                     }
                   }}

@@ -5,17 +5,19 @@ export const initOlm = async () => {
 };
 
 export const generateOlmAccount = () => {
-  let account = new Olm.Account();
+  const account = new Olm.Account();
   account.create();
   return account;
 };
 
-export const generateOneTimeKeys = (account: any, numberOfKeys: number = 50) => {
+export type OlmAccount = InstanceType<typeof Olm.Account>;
+
+export const generateOneTimeKeys = (account: OlmAccount, numberOfKeys: number = 50) => {
   account.generate_one_time_keys(numberOfKeys);
   return account.one_time_keys();
 };
 
-export const signData = (account: any, message: string) => {
+export const signData = (account: OlmAccount, message: string) => {
   return account.sign(message);
 };
 
@@ -116,7 +118,7 @@ export const generateSecurityNumber = async (pubKeyA: string, pubKeyB: string): 
   const hashBuffer = await window.crypto.subtle.digest('SHA-512', data);
   const hashArray = new Uint8Array(hashBuffer);
   
-  let result = [];
+  const result: string[] = [];
   for (let i = 0; i < 12; i++) {
     let num = 0;
     for (let j = 0; j < 5; j++) {

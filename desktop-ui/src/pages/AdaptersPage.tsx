@@ -20,7 +20,7 @@ export const AdaptersPage: React.FC = () => {
   const [promptInput, setPromptInput] = useState('');
   const [pendingAdapter, setPendingAdapter] = useState<Adapter | null>(null);
 
-  const [statusInfo, setStatusInfo] = useState<any>(null);
+  const [statusInfo, setStatusInfo] = useState<Record<string, unknown> | null>(null);
   const [statusError, setStatusError] = useState<boolean>(false);
   const [logs, setLogs] = useState<string[]>([]);
   

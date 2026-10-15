@@ -29,7 +29,7 @@ export const ScheduleSettings = () => {
       } else {
         toast.error('Failed to schedule task');
       }
-    } catch (err) {
+    } catch {
       toast.error('Network error');
     }
   };
@@ -46,7 +46,7 @@ export const ScheduleSettings = () => {
       } else {
         toast.error('Failed to remove task');
       }
-    } catch (err) {
+    } catch {
       toast.error('Network error');
     }
   };
