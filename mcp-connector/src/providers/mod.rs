@@ -26,7 +26,7 @@ pub trait Provider: Send + Sync {
     ) -> Result<(), ProviderError>;
 
     /// Generate embeddings for knowledge base chunks.
-    async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, ProviderError> {
+    async fn embed(&self, _texts: &[String]) -> Result<Vec<Vec<f32>>, ProviderError> {
         Err(ProviderError::NotConfigured("Embeddings not supported by this provider".into()))
     }
 }

@@ -171,10 +171,10 @@ impl RatchetState {
         
         let mut iv = [0u8; 12];
         rand::thread_rng().fill_bytes(&mut iv);
-        let cipher = Aes256Gcm::new(aes_gcm::Key::<Aes256Gcm>::from_slice(&mk));
-        let nonce_gcm = Nonce::from_slice(&iv);
+        let cipher = Aes256Gcm::new(&aes_gcm::Key::<Aes256Gcm>::from(mk));
+        let nonce_gcm = Nonce::from(iv);
         
-        let ciphertext_only = cipher.encrypt(nonce_gcm, plaintext).map_err(|_| "Encryption failed")?;
+        let ciphertext_only = cipher.encrypt(&nonce_gcm, plaintext).map_err(|_| "Encryption failed")?;
         
         // Final payload structure: IV (12 bytes) || Ciphertext
         let mut final_payload = iv.to_vec();
@@ -222,9 +222,9 @@ impl RatchetState {
         if ciphertext_with_iv.len() < 12 { return None; }
         let (iv, ciphertext) = ciphertext_with_iv.split_at(12);
         
-        let cipher = Aes256Gcm::new(aes_gcm::Key::<Aes256Gcm>::from_slice(mk));
-        let nonce_gcm = Nonce::from_slice(iv);
+        let nonce_gcm = Nonce::try_from(iv).ok()?;
+        let cipher = Aes256Gcm::new(&aes_gcm::Key::<Aes256Gcm>::from(*mk));
         
-        cipher.decrypt(nonce_gcm, ciphertext).ok()
+        cipher.decrypt(&nonce_gcm, ciphertext).ok()
     }
 }

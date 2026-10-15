@@ -58,7 +58,6 @@ fn run_wasm_tool_blocking(
     let module = Module::new(&engine, &wasm_bytes)?;
 
     let mut wasi_builder = WasiCtxBuilder::new();
-    let mut stdout_buf = Vec::new();
 
     // Setup pipes
     let stdin_bytes = input_json.as_bytes().to_vec();
@@ -107,7 +106,7 @@ fn run_wasm_tool_blocking(
     start_fn.call(&mut store, ())?;
 
     drop(store);
-    stdout_buf = stdout_pipe.try_into_inner().expect("WASI engine execution failed").into_inner();
+    let stdout_buf = stdout_pipe.try_into_inner().expect("WASI engine execution failed").into_inner();
 
     let output = String::from_utf8(stdout_buf)
         .map_err(|e| anyhow!("Wasm stdout contained invalid UTF-8: {}", e))?;

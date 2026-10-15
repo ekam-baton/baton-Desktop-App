@@ -259,16 +259,14 @@ fn get_or_create_x25519_keypair() -> ([u8; 32], [u8; 32]) {
 
 /// Persist an Ed25519 Identity keypair for E2EE across restarts.
 fn get_or_create_ed25519_keypair() -> ([u8; 32], [u8; 32]) {
-    use ed25519_dalek::{SigningKey, SecretKey};
+    use ed25519_dalek::SigningKey;
     let path = get_app_data_dir().join("baton_ed25519_key.bin");
     if let Ok(bytes) = std::fs::read(&path) {
         if bytes.len() == 32 {
             let mut priv_bytes = [0u8; 32];
             priv_bytes.copy_from_slice(&bytes);
-            if let Ok(secret) = SecretKey::try_from(priv_bytes) {
-                let signing_key = SigningKey::from_bytes(&secret);
-                return (priv_bytes, signing_key.verifying_key().to_bytes());
-            }
+            let signing_key = SigningKey::from_bytes(&priv_bytes);
+            return (priv_bytes, signing_key.verifying_key().to_bytes());
         }
     }
     

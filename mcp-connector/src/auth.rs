@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use aes_gcm::{Aes256Gcm, Key, Nonce, aead::{Aead, KeyInit}};
 use rand::RngCore;
-use sha2::{Sha256, Digest};
+use sha2::Sha256;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 
 use crate::state::AppState;
@@ -21,12 +21,12 @@ pub fn encrypt_db_field(plaintext: &str, master_secret: &str) -> anyhow::Result<
     let mut derived_key = [0u8; 32];
     hk.expand(b"baton_db_encryption", &mut derived_key).map_err(|_| anyhow!("HKDF expand failed"))?;
 
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&derived_key));
+    let cipher = Aes256Gcm::new(&Key::<Aes256Gcm>::from(derived_key));
     let mut iv = [0u8; 12];
     rand::thread_rng().fill_bytes(&mut iv);
-    let nonce = Nonce::from_slice(&iv);
+    let nonce = Nonce::from(iv);
 
-    let ciphertext = cipher.encrypt(nonce, plaintext.as_bytes())
+    let ciphertext = cipher.encrypt(&nonce, plaintext.as_bytes())
         .map_err(|e| anyhow::anyhow!("Encryption failed: {}", e))?;
 
     let mut combined = iv.to_vec();
@@ -48,10 +48,10 @@ pub fn decrypt_db_field(ciphertext_b64: &str, master_secret: &str) -> anyhow::Re
     hk.expand(b"baton_db_encryption", &mut derived_key).map_err(|_| anyhow!("HKDF failed"))?;
 
     let (iv, ciphertext) = combined.split_at(12);
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&derived_key));
-    let nonce = Nonce::from_slice(iv);
+    let cipher = Aes256Gcm::new(&Key::<Aes256Gcm>::from(derived_key));
+    let nonce = Nonce::try_from(iv).map_err(|_| anyhow!("Invalid IV length"))?;
 
-    let plaintext = match cipher.decrypt(nonce, ciphertext) {
+    let plaintext = match cipher.decrypt(&nonce, ciphertext) {
         Ok(p) => p,
         Err(_) => return Err(anyhow::anyhow!("Decryption failed")),
     };
