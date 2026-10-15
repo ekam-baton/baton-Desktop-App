@@ -51,9 +51,11 @@ export const ChatPage = () => {
       if (res.ok) {
         const data: ChatSession[] = await res.json();
         setSessions(data);
-        if (data.length > 0 && !activeSessionId) {
-          setActiveSessionId(data[0].id);
-        } else if (data.length === 0) {
+        setActiveSessionId(prev => {
+          if (prev) return prev;
+          return data.length > 0 ? data[0].id : null;
+        });
+        if (data.length === 0) {
           // Auto-create initial session if none exist
           const createRes = await fetch(`${API_BASE}/admin/api/sessions`, {
             method: 'POST',
@@ -70,7 +72,7 @@ export const ChatPage = () => {
     } catch (err) {
       console.error("Failed to load sessions:", err);
     }
-  }, [getAuthHeaders, activeSessionId]);
+  }, [getAuthHeaders]);
 
   // Load messages whenever active session changes
   const loadMessages = useCallback(async (sessionId: string) => {
@@ -214,6 +216,17 @@ export const ChatPage = () => {
         })
       });
 
+      if (!response.ok) {
+        let errDetail = response.statusText;
+        try {
+          const errJson = await response.json();
+          if (errJson.error) errDetail = errJson.error;
+        } catch {
+          // Response was not JSON
+        }
+        throw new Error(errDetail || `Chat API returned HTTP ${response.status}`);
+      }
+
       const reader = response.body?.getReader();
       const decoder = new TextDecoder();
       setChatHistory(prev => [...prev, { role: 'assistant', content: '' }]);
@@ -229,9 +242,9 @@ export const ChatPage = () => {
               const data = line.slice(6);
               agentResponseText += data;
               setChatHistory(prev => {
-                const newHist = [...prev];
-                newHist[newHist.length - 1].content = agentResponseText;
-                return newHist;
+                if (prev.length === 0) return prev;
+                const last = prev[prev.length - 1];
+                return [...prev.slice(0, -1), { ...last, content: agentResponseText }];
               });
             }
           }
@@ -246,8 +259,9 @@ export const ChatPage = () => {
           body: JSON.stringify({ role: 'assistant', content: agentResponseText })
         });
       }
-    } catch {
-      toast.error("Failed to communicate with agent.");
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : "Failed to communicate with agent.";
+      toast.error(errMsg);
     } finally {
       setIsStreaming(false);
     }
