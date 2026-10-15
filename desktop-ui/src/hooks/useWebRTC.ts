@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 
 // The "Dumb Pipe" envelope structure expected by the Cloud Router
-interface Envelope {
+export interface Envelope {
     receiver_id: String;
     sender_id?: String;
     payload_encrypted: String; // JSON string containing WebRTC signaling data
