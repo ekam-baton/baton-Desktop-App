@@ -494,3 +494,252 @@ pub async fn download_vault_handler(
         Err(StatusCode::NOT_FOUND)
     }
 }
+
+// ── Chat Persistence & Session Endpoints ─────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatSession {
+    pub id: String,
+    pub title: String,
+    pub agent_id: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub is_pinned: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateSessionRequest {
+    pub title: Option<String>,
+    pub agent_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateSessionRequest {
+    pub title: Option<String>,
+    pub is_pinned: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoredChatMessage {
+    pub id: String,
+    pub session_id: String,
+    pub role: String,
+    pub content: String,
+    pub tool_call_json: Option<String>,
+    pub timestamp: i64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AddChatMessageRequest {
+    pub role: String,
+    pub content: String,
+    pub tool_call_json: Option<String>,
+}
+
+pub async fn list_sessions_handler(
+    headers: HeaderMap,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<ChatSession>>, StatusCode> {
+    check_auth(&headers, &state.config.admin_password)?;
+
+    use sqlx::Row;
+    let rows = sqlx::query("SELECT id, title, agent_id, created_at, updated_at, is_pinned FROM chat_sessions ORDER BY is_pinned DESC, updated_at DESC")
+        .fetch_all(&state.db).await
+        .map_err(|e| {
+            tracing::error!("DB error in list_sessions_handler: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    let mut sessions = Vec::new();
+    for row in rows {
+        let is_pinned_int: i64 = row.try_get("is_pinned").unwrap_or(0);
+        sessions.push(ChatSession {
+            id: row.try_get("id").unwrap_or_default(),
+            title: row.try_get("title").unwrap_or_default(),
+            agent_id: row.try_get("agent_id").unwrap_or(None),
+            created_at: row.try_get("created_at").unwrap_or(0),
+            updated_at: row.try_get("updated_at").unwrap_or(0),
+            is_pinned: is_pinned_int != 0,
+        });
+    }
+
+    Ok(Json(sessions))
+}
+
+pub async fn create_session_handler(
+    headers: HeaderMap,
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<CreateSessionRequest>,
+) -> Result<Json<ChatSession>, StatusCode> {
+    check_auth(&headers, &state.config.admin_password)?;
+
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let now = chrono::Utc::now().timestamp_millis();
+    let title = payload.title.unwrap_or_else(|| "New Conversation".to_string());
+
+    sqlx::query("INSERT INTO chat_sessions (id, title, agent_id, created_at, updated_at, is_pinned) VALUES ($1, $2, $3, $4, $5, 0)")
+        .bind(&session_id)
+        .bind(&title)
+        .bind(&payload.agent_id)
+        .bind(now)
+        .bind(now)
+        .execute(&state.db).await
+        .map_err(|e| {
+            tracing::error!("DB error in create_session_handler: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    Ok(Json(ChatSession {
+        id: session_id,
+        title,
+        agent_id: payload.agent_id,
+        created_at: now,
+        updated_at: now,
+        is_pinned: false,
+    }))
+}
+
+pub async fn update_session_handler(
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<UpdateSessionRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    check_auth(&headers, &state.config.admin_password)?;
+
+    let now = chrono::Utc::now().timestamp_millis();
+
+    if let Some(title) = payload.title {
+        sqlx::query("UPDATE chat_sessions SET title = $1, updated_at = $2 WHERE id = $3")
+            .bind(&title)
+            .bind(now)
+            .bind(&id)
+            .execute(&state.db).await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    }
+
+    if let Some(is_pinned) = payload.is_pinned {
+        let pinned_int: i64 = if is_pinned { 1 } else { 0 };
+        sqlx::query("UPDATE chat_sessions SET is_pinned = $1, updated_at = $2 WHERE id = $3")
+            .bind(pinned_int)
+            .bind(now)
+            .bind(&id)
+            .execute(&state.db).await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    }
+
+    Ok(Json(serde_json::json!({"status": "updated", "id": id})))
+}
+
+pub async fn delete_session_handler(
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<StatusCode, StatusCode> {
+    check_auth(&headers, &state.config.admin_password)?;
+
+    sqlx::query("DELETE FROM chat_messages WHERE session_id = $1")
+        .bind(&id)
+        .execute(&state.db).await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    sqlx::query("DELETE FROM chat_sessions WHERE id = $1")
+        .bind(&id)
+        .execute(&state.db).await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(StatusCode::OK)
+}
+
+pub async fn list_session_messages_handler(
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<StoredChatMessage>>, StatusCode> {
+    check_auth(&headers, &state.config.admin_password)?;
+
+    use sqlx::Row;
+    let rows = sqlx::query("SELECT id, session_id, role, content, tool_call_json, timestamp FROM chat_messages WHERE session_id = $1 ORDER BY timestamp ASC")
+        .bind(&id)
+        .fetch_all(&state.db).await
+        .map_err(|e| {
+            tracing::error!("DB error in list_session_messages_handler: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    let mut messages = Vec::new();
+    for row in rows {
+        messages.push(StoredChatMessage {
+            id: row.try_get("id").unwrap_or_default(),
+            session_id: row.try_get("session_id").unwrap_or_default(),
+            role: row.try_get("role").unwrap_or_default(),
+            content: row.try_get("content").unwrap_or_default(),
+            tool_call_json: row.try_get("tool_call_json").unwrap_or(None),
+            timestamp: row.try_get("timestamp").unwrap_or(0),
+        });
+    }
+
+    Ok(Json(messages))
+}
+
+pub async fn add_session_message_handler(
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<AddChatMessageRequest>,
+) -> Result<Json<StoredChatMessage>, StatusCode> {
+    check_auth(&headers, &state.config.admin_password)?;
+
+    let msg_id = uuid::Uuid::new_v4().to_string();
+    let now = chrono::Utc::now().timestamp_millis();
+
+    sqlx::query("INSERT INTO chat_messages (id, session_id, role, content, tool_call_json, timestamp) VALUES ($1, $2, $3, $4, $5, $6)")
+        .bind(&msg_id)
+        .bind(&id)
+        .bind(&payload.role)
+        .bind(&payload.content)
+        .bind(&payload.tool_call_json)
+        .bind(now)
+        .execute(&state.db).await
+        .map_err(|e| {
+            tracing::error!("DB error in add_session_message_handler: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    // Also update session updated_at
+    let _ = sqlx::query("UPDATE chat_sessions SET updated_at = $1 WHERE id = $2")
+        .bind(now)
+        .bind(&id)
+        .execute(&state.db).await;
+
+    Ok(Json(StoredChatMessage {
+        id: msg_id,
+        session_id: id,
+        role: payload.role,
+        content: payload.content,
+        tool_call_json: payload.tool_call_json,
+        timestamp: now,
+    }))
+}
+
+pub async fn clear_session_messages_handler(
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<StatusCode, StatusCode> {
+    check_auth(&headers, &state.config.admin_password)?;
+
+    sqlx::query("DELETE FROM chat_messages WHERE session_id = $1")
+        .bind(&id)
+        .execute(&state.db).await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let now = chrono::Utc::now().timestamp_millis();
+    let _ = sqlx::query("UPDATE chat_sessions SET updated_at = $1 WHERE id = $2")
+        .bind(now)
+        .bind(&id)
+        .execute(&state.db).await;
+
+    Ok(StatusCode::OK)
+}
+

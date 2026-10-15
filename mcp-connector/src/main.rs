@@ -35,7 +35,7 @@ use axum::{
     http::StatusCode,
     middleware::{self, Next},
     response::Response,
-    routing::{get, post},
+    routing::{delete, get, post, put},
     Router,
 };
 use dotenvy::dotenv;
@@ -291,7 +291,10 @@ pub async fn run_server() -> anyhow::Result<()> {
         .route("/admin/api/group/{id}", axum::routing::delete(handlers::admin::delete_group_handler))
         .route("/admin/api/safety-number/{device_id}", get(handlers::admin::safety_number_handler))
         .route("/admin/api/vault", post(handlers::admin::upload_vault_handler))
-        .route("/admin/api/vault/{client_id}", get(handlers::admin::download_vault_handler));
+        .route("/admin/api/vault/{client_id}", get(handlers::admin::download_vault_handler))
+        .route("/admin/api/sessions", get(handlers::admin::list_sessions_handler).post(handlers::admin::create_session_handler))
+        .route("/admin/api/sessions/{id}", put(handlers::admin::update_session_handler).delete(handlers::admin::delete_session_handler))
+        .route("/admin/api/sessions/{id}/messages", get(handlers::admin::list_session_messages_handler).post(handlers::admin::add_session_message_handler).delete(handlers::admin::clear_session_messages_handler));
 
     let app = Router::new()
         // Health probes (no rate limit needed — used by orchestrators)
