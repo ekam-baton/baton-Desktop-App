@@ -10,7 +10,7 @@ use serde_json::json;
 use axum::response::sse::{Event, Sse};
 use std::convert::Infallible;
 
-use crate::auth::validate_access_token;
+use crate::auth::validate_client_authorization;
 use crate::mcp_models::{McpRequest, McpResponse};
 use crate::state::AppState;
 
@@ -53,7 +53,12 @@ pub async fn initialize_handler(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<McpRequest>,
 ) -> impl IntoResponse {
-    let claims = match validate_access_token(&headers, &state.config.jwt_secret) {
+    let raw_target = query.target.unwrap_or_else(|| "openclaw".to_string()).to_lowercase();
+    if !validate_target(&raw_target) {
+        return (StatusCode::BAD_REQUEST, Json(McpResponse::error(payload.id, -32602, "Invalid target name".into(), None))).into_response();
+    }
+
+    let claims = match validate_client_authorization(&headers, &state, Some(&raw_target)).await {
         Ok(c) => c,
         Err(e) => return e.into_response(),
     };
@@ -63,11 +68,6 @@ pub async fn initialize_handler(
             StatusCode::BAD_REQUEST,
             Json(McpResponse::error(payload.id, -32600, "Invalid JSON-RPC version".into(), None))
         ).into_response();
-    }
-
-    let raw_target = query.target.unwrap_or_else(|| "openclaw".to_string()).to_lowercase();
-    if !validate_target(&raw_target) {
-        return (StatusCode::BAD_REQUEST, Json(McpResponse::error(payload.id, -32602, "Invalid target name".into(), None))).into_response();
     }
 
     let client = match get_or_spawn_client(&state, &raw_target, &claims.sub) {
@@ -99,7 +99,7 @@ pub async fn notifications_initialized_handler(
     headers: HeaderMap,
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
-    if let Err(e) = validate_access_token(&headers, &state.config.jwt_secret) {
+    if let Err(e) = validate_client_authorization(&headers, &state, None).await {
         return e.into_response();
     }
     StatusCode::OK.into_response()
@@ -111,7 +111,12 @@ pub async fn tools_list_handler(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<McpRequest>,
 ) -> impl IntoResponse {
-    let claims = match validate_access_token(&headers, &state.config.jwt_secret) {
+    let raw_target = query.target.unwrap_or_else(|| "openclaw".to_string()).to_lowercase();
+    if !validate_target(&raw_target) {
+        return (StatusCode::BAD_REQUEST, Json(McpResponse::error(payload.id, -32602, "Invalid target name".into(), None))).into_response();
+    }
+
+    let claims = match validate_client_authorization(&headers, &state, Some(&raw_target)).await {
         Ok(c) => c,
         Err(e) => return e.into_response(),
     };
@@ -122,11 +127,6 @@ pub async fn tools_list_handler(
 
     if !payload.is_method_allowed() {
         return (StatusCode::BAD_REQUEST, Json(McpResponse::method_not_found(payload.id))).into_response();
-    }
-
-    let raw_target = query.target.unwrap_or_else(|| "openclaw".to_string()).to_lowercase();
-    if !validate_target(&raw_target) {
-        return (StatusCode::BAD_REQUEST, Json(McpResponse::error(payload.id, -32602, "Invalid target name".into(), None))).into_response();
     }
 
     let client = match get_or_spawn_client(&state, &raw_target, &claims.sub) {
@@ -149,7 +149,12 @@ pub async fn tools_call_handler(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<McpRequest>,
 ) -> impl IntoResponse {
-    let claims = match validate_access_token(&headers, &state.config.jwt_secret) {
+    let raw_target = query.target.unwrap_or_else(|| "openclaw".to_string()).to_lowercase();
+    if !validate_target(&raw_target) {
+        return (StatusCode::BAD_REQUEST, Json(McpResponse::error(payload.id, -32602, "Invalid target name".into(), None))).into_response();
+    }
+
+    let claims = match validate_client_authorization(&headers, &state, Some(&raw_target)).await {
         Ok(c) => c,
         Err(e) => return e.into_response(),
     };
@@ -160,11 +165,6 @@ pub async fn tools_call_handler(
 
     if !payload.is_method_allowed() {
         return (StatusCode::BAD_REQUEST, Json(McpResponse::method_not_found(payload.id))).into_response();
-    }
-
-    let raw_target = query.target.unwrap_or_else(|| "openclaw".to_string()).to_lowercase();
-    if !validate_target(&raw_target) {
-        return (StatusCode::BAD_REQUEST, Json(McpResponse::error(payload.id, -32602, "Invalid target name".into(), None))).into_response();
     }
 
     // Intercept built-in KB tools

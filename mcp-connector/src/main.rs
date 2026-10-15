@@ -294,7 +294,9 @@ pub async fn run_server() -> anyhow::Result<()> {
         .route("/admin/api/vault/{client_id}", get(handlers::admin::download_vault_handler))
         .route("/admin/api/sessions", get(handlers::admin::list_sessions_handler).post(handlers::admin::create_session_handler))
         .route("/admin/api/sessions/{id}", put(handlers::admin::update_session_handler).delete(handlers::admin::delete_session_handler))
-        .route("/admin/api/sessions/{id}/messages", get(handlers::admin::list_session_messages_handler).post(handlers::admin::add_session_message_handler).delete(handlers::admin::clear_session_messages_handler));
+        .route("/admin/api/sessions/{id}/messages", get(handlers::admin::list_session_messages_handler).post(handlers::admin::add_session_message_handler).delete(handlers::admin::clear_session_messages_handler))
+        .route("/admin/api/authorizations", get(handlers::admin::list_authorizations_handler).post(handlers::admin::grant_authorization_handler))
+        .route("/admin/api/authorizations/{client_id}/{agent_id}", delete(handlers::admin::revoke_authorization_handler));
 
     let app = Router::new()
         // Health probes (no rate limit needed — used by orchestrators)

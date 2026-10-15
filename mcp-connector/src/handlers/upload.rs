@@ -10,7 +10,7 @@ use tokio::{fs::File, io::AsyncWriteExt};
 use uuid::Uuid;
 use tracing::{info, warn};
 
-use crate::auth::validate_access_token;
+use crate::auth::validate_client_authorization;
 use crate::state::AppState;
 
 /// Allowed file extensions (lowercase). Reject anything not on this list.
@@ -30,7 +30,7 @@ pub async fn upload_handler(
     State(state): State<Arc<AppState>>,
     mut multipart: Multipart,
 ) -> impl IntoResponse {
-    if let Err(e) = validate_access_token(&headers, &state.config.jwt_secret) {
+    if let Err(e) = validate_client_authorization(&headers, &state, None).await {
         return e.into_response();
     }
 

@@ -306,16 +306,115 @@ pub enum AuthError {
     Expired,
     #[error("Invalid token: {0}")]
     Invalid(String),
+    #[error("Device authorization has been revoked or is pending approval")]
+    Revoked,
+    #[error("Client does not have permission to access agent: {0}")]
+    AgentForbidden(String),
 }
 
 impl axum::response::IntoResponse for AuthError {
     fn into_response(self) -> axum::response::Response {
-        // Always return 401 with a generic message — never leak which check failed.
-        (
-            axum::http::StatusCode::UNAUTHORIZED,
-            axum::http::HeaderMap::new(),
-            "Unauthorized",
-        )
-            .into_response()
+        match self {
+            AuthError::AgentForbidden(ref agent) => (
+                axum::http::StatusCode::FORBIDDEN,
+                axum::response::Json(serde_json::json!({
+                    "error": "Forbidden",
+                    "detail": format!("Client is not authorized to message agent '{}'", agent)
+                }))
+            ).into_response(),
+            AuthError::Revoked => (
+                axum::http::StatusCode::FORBIDDEN,
+                axum::response::Json(serde_json::json!({
+                    "error": "Forbidden",
+                    "detail": "Device authorization has been revoked or is pending approval"
+                }))
+            ).into_response(),
+            _ => (
+                axum::http::StatusCode::UNAUTHORIZED,
+                axum::http::HeaderMap::new(),
+                "Unauthorized",
+            ).into_response(),
+        }
     }
 }
+
+/// Comprehensive server-side authorization check:
+/// 1. Validates JWT signature, format, and expiry.
+/// 2. Verifies that the client_id exists in `authorized_users` with `status == 'approved'`.
+/// 3. If `target_agent` is provided, verifies that the client has permission to access that specific agent ID.
+pub async fn validate_client_authorization(
+    headers: &HeaderMap,
+    state: &Arc<AppState>,
+    target_agent: Option<&str>,
+) -> Result<Claims, AuthError> {
+    // 1. Validate JWT cryptographic signature and expiry
+    let claims = validate_access_token(headers, &state.config.jwt_secret)?;
+
+    // 2. Server-side Revocation and Status check
+    use sqlx::Row;
+    let user_row = sqlx::query("SELECT status, role FROM authorized_users WHERE client_id = $1")
+        .bind(&claims.sub)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| {
+            tracing::error!("DB error during authorization check: {}", e);
+            AuthError::Invalid("Database error".into())
+        })?;
+
+    let (status, role) = match user_row {
+        Some(row) => {
+            let s: String = row.try_get("status").unwrap_or_default();
+            let r: String = row.try_get("role").unwrap_or_else(|_| "guest".into());
+            (s, r)
+        }
+        None => {
+            // Also check paired_devices cache
+            let paired = state.paired_devices.contains_key(&claims.sub);
+            if paired {
+                ("approved".to_string(), "guest".to_string())
+            } else {
+                return Err(AuthError::Revoked);
+            }
+        }
+    };
+
+    if status != "approved" {
+        tracing::warn!("Blocked request from unapproved client '{}' (status: '{}')", claims.sub, status);
+        return Err(AuthError::Revoked);
+    }
+
+    // 3. Granular Agent-Level ACL check
+    if let Some(agent) = target_agent {
+        // Admins automatically have access to all agents
+        if role != "admin" {
+            let auth_row = sqlx::query(
+                "SELECT 1 FROM agent_authorizations WHERE client_id = $1 AND (agent_id = $2 OR agent_id = '*')"
+            )
+            .bind(&claims.sub)
+            .bind(agent)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error during agent authorization check: {}", e);
+                AuthError::Invalid("Database error".into())
+            })?;
+
+            if auth_row.is_none() {
+                // If specific authorizations are defined for this client, reject unauthorized target
+                let has_any = sqlx::query("SELECT 1 FROM agent_authorizations WHERE client_id = $1")
+                    .bind(&claims.sub)
+                    .fetch_optional(&state.db)
+                    .await
+                    .unwrap_or(None);
+
+                if has_any.is_some() {
+                    tracing::warn!("Client '{}' forbidden from accessing agent '{}'", claims.sub, agent);
+                    return Err(AuthError::AgentForbidden(agent.to_string()));
+                }
+            }
+        }
+    }
+
+    Ok(claims)
+}
+

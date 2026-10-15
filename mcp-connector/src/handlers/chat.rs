@@ -13,7 +13,7 @@ use axum::response::sse::{Event, Sse};
 use futures::stream::Stream;
 use std::convert::Infallible;
 
-use crate::auth::validate_access_token;
+use crate::auth::validate_client_authorization;
 use crate::adapters::{get_adapter, AgentCredentials};
 use crate::providers::{get_provider, ChatMessage, ChatOptions};
 use crate::state::AppState;
@@ -39,8 +39,8 @@ pub async fn execute_handler(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<McpRequest>,
 ) -> impl IntoResponse {
-    // Auth validation
-    let claims = match validate_access_token(&headers, &state.config.jwt_secret) {
+    // Auth validation with server-side revocation and target agent authorization
+    let claims = match validate_client_authorization(&headers, &state, Some(&payload.target_environment)).await {
         Ok(c) => c,
         Err(e) => return e.into_response(),
     };
@@ -111,11 +111,11 @@ pub async fn chat_handler(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<ChatRequest>,
 ) -> impl IntoResponse {
-    if let Err(e) = validate_access_token(&headers, &state.config.jwt_secret) {
+    let provider_name = payload.provider.unwrap_or_else(|| state.config.default_provider.clone());
+
+    if let Err(e) = validate_client_authorization(&headers, &state, Some(&provider_name)).await {
         return e.into_response();
     }
-
-    let provider_name = payload.provider.unwrap_or_else(|| state.config.default_provider.clone());
     let provider = match get_provider(&provider_name, &state.config, &state.http) {
         Ok(p) => p,
         Err(e) => {

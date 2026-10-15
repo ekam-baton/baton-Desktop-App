@@ -135,7 +135,18 @@ pub async fn approve_handler(
     })?
     .rows_affected();
 
-    if rows_affected == 0 {
+    if rows_affected > 0 {
+        // Grant default baseline agent authorization (wildcard '*') so newly approved clients can message agents
+        let now = chrono::Utc::now().timestamp_millis();
+        let _ = sqlx::query(
+            "INSERT INTO agent_authorizations (client_id, agent_id, permission, created_at)
+             VALUES ($1, '*', 'read_write', $2)
+             ON CONFLICT (client_id, agent_id) DO NOTHING"
+        )
+        .bind(&client_id)
+        .bind(now)
+        .execute(&state.db).await;
+    } else {
         // Either doesn't exist or already approved/denied — not an error.
         tracing::warn!("approve_handler: no pending row found for client_id={}", client_id);
     }
@@ -742,4 +753,98 @@ pub async fn clear_session_messages_handler(
 
     Ok(StatusCode::OK)
 }
+
+// ── Agent Authorization ACL Management ───────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentAuthorization {
+    pub client_id: String,
+    pub agent_id: String,
+    pub permission: String,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct GrantAuthorizationRequest {
+    pub client_id: String,
+    pub agent_id: String,
+    pub permission: Option<String>,
+}
+
+pub async fn list_authorizations_handler(
+    headers: HeaderMap,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<AgentAuthorization>>, StatusCode> {
+    check_auth(&headers, &state.config.admin_password)?;
+
+    use sqlx::Row;
+    let rows = sqlx::query("SELECT client_id, agent_id, permission, created_at FROM agent_authorizations ORDER BY created_at DESC")
+        .fetch_all(&state.db).await
+        .map_err(|e| {
+            tracing::error!("DB error in list_authorizations_handler: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    let mut auths = Vec::new();
+    for row in rows {
+        auths.push(AgentAuthorization {
+            client_id: row.try_get("client_id").unwrap_or_default(),
+            agent_id: row.try_get("agent_id").unwrap_or_default(),
+            permission: row.try_get("permission").unwrap_or_default(),
+            created_at: row.try_get("created_at").unwrap_or(0),
+        });
+    }
+
+    Ok(Json(auths))
+}
+
+pub async fn grant_authorization_handler(
+    headers: HeaderMap,
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<GrantAuthorizationRequest>,
+) -> Result<Json<AgentAuthorization>, StatusCode> {
+    check_auth(&headers, &state.config.admin_password)?;
+
+    let now = chrono::Utc::now().timestamp_millis();
+    let perm = payload.permission.unwrap_or_else(|| "read_write".to_string());
+
+    sqlx::query(
+        "INSERT INTO agent_authorizations (client_id, agent_id, permission, created_at)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (client_id, agent_id) DO UPDATE SET permission = $3, created_at = $4"
+    )
+    .bind(&payload.client_id)
+    .bind(&payload.agent_id)
+    .bind(&perm)
+    .bind(now)
+    .execute(&state.db).await
+    .map_err(|e| {
+        tracing::error!("DB error in grant_authorization_handler: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    Ok(Json(AgentAuthorization {
+        client_id: payload.client_id,
+        agent_id: payload.agent_id,
+        permission: perm,
+        created_at: now,
+    }))
+}
+
+pub async fn revoke_authorization_handler(
+    headers: HeaderMap,
+    Path((client_id, agent_id)): Path<(String, String)>,
+    State(state): State<Arc<AppState>>,
+) -> Result<StatusCode, StatusCode> {
+    check_auth(&headers, &state.config.admin_password)?;
+
+    sqlx::query("DELETE FROM agent_authorizations WHERE client_id = $1 AND agent_id = $2")
+        .bind(&client_id)
+        .bind(&agent_id)
+        .execute(&state.db).await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(StatusCode::OK)
+}
+
 

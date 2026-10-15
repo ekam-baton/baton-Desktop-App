@@ -2,14 +2,14 @@ use std::sync::Arc;
 use axum::{extract::State, http::{HeaderMap, StatusCode}, response::IntoResponse, Json};
 use serde_json::json;
 
-use crate::auth::validate_access_token;
+use crate::auth::validate_client_authorization;
 use crate::state::AppState;
 
 pub async fn tools_handler(
     headers: HeaderMap,
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
-    if let Err(e) = validate_access_token(&headers, &state.config.jwt_secret) {
+    if let Err(e) = validate_client_authorization(&headers, &state, None).await {
         return e.into_response();
     }
 

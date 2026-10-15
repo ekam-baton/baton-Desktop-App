@@ -63,6 +63,7 @@ pub async fn get_audit_logs(
     headers: HeaderMap,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<AuditLog>>, StatusCode> {
+    check_auth(&headers, &state.config.admin_password)?;
     let logs = sqlx::query_as::<_, AuditLog>(
         "SELECT id, event_type, detail, severity, datetime(created_at, 'localtime') as created_at FROM audit_logs ORDER BY id DESC LIMIT 100"
     )
@@ -79,6 +80,7 @@ pub async fn get_permissions(
     headers: HeaderMap,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<Permission>>, StatusCode> {
+    check_auth(&headers, &state.config.admin_password)?;
     let perms = sqlx::query_as::<_, Permission>(
         "SELECT key, value FROM permissions"
     )
@@ -94,6 +96,7 @@ pub async fn update_permission(
     Path(key): Path<String>,
     Json(payload): Json<UpdatePermissionReq>,
 ) -> Result<StatusCode, StatusCode> {
+    check_auth(&headers, &state.config.admin_password)?;
     sqlx::query("UPDATE permissions SET value = $1 WHERE key = $2")
         .bind(payload.value)
         .bind(&key)
@@ -115,6 +118,7 @@ pub async fn get_schedule(
     headers: HeaderMap,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<ScheduledTask>>, StatusCode> {
+    check_auth(&headers, &state.config.admin_password)?;
     let tasks = sqlx::query_as::<_, ScheduledTask>(
         "SELECT id, task_name, cron_expression, datetime(created_at, 'localtime') as created_at FROM scheduled_tasks ORDER BY id DESC"
     )
@@ -129,6 +133,7 @@ pub async fn create_schedule(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<CreateTaskReq>,
 ) -> Result<StatusCode, StatusCode> {
+    check_auth(&headers, &state.config.admin_password)?;
     sqlx::query("INSERT INTO scheduled_tasks (task_name, cron_expression) VALUES ($1, $2)")
         .bind(&payload.task_name)
         .bind(&payload.cron_expression)
@@ -151,6 +156,7 @@ pub async fn delete_schedule(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> Result<StatusCode, StatusCode> {
+    check_auth(&headers, &state.config.admin_password)?;
     sqlx::query("DELETE FROM scheduled_tasks WHERE id = $1")
         .bind(id)
         .execute(&state.db)
@@ -163,6 +169,7 @@ pub async fn get_inbox(
     headers: HeaderMap,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<InboxFile>>, StatusCode> {
+    check_auth(&headers, &state.config.admin_password)?;
     let files = sqlx::query_as::<_, InboxFile>(
         "SELECT id, file_name, sender, datetime(created_at, 'localtime') as created_at FROM inbox_files ORDER BY id DESC"
     )
@@ -182,6 +189,7 @@ pub async fn create_knowledge(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<CreateKnowledgeReq>,
 ) -> Result<StatusCode, StatusCode> {
+    check_auth(&headers, &state.config.admin_password)?;
     // Mock Vector DB indexing: just record the directory
     // In a real implementation this would use 'ort' or 'candle' to embed files
     let file_count = 42; // Mock count
@@ -207,6 +215,7 @@ pub async fn get_knowledge(
     headers: HeaderMap,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<KnowledgeDir>>, StatusCode> {
+    check_auth(&headers, &state.config.admin_password)?;
     let dirs = sqlx::query_as::<_, KnowledgeDir>(
         "SELECT id, directory_path, file_count, datetime(created_at, 'localtime') as created_at FROM knowledge_base ORDER BY id DESC"
     )
