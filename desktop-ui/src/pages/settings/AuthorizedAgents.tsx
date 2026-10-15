@@ -2,12 +2,14 @@ import { toast } from 'sonner';
 import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
 import { useAppContext } from '../../contexts/AppContext';
 
+const API_BASE = import.meta.env.VITE_MCP_URL || 'http://localhost:8081';
+
 export const AuthorizedAgents = () => {
   const { authorized, loading, loadData, adminPassword } = useAppContext();
 
   const handleAction = async (clientId: string, action: 'revoke') => {
     try {
-      const res = await fetch(`http://localhost:8081/admin/api/${action}/${encodeURIComponent(clientId)}`, { 
+      const res = await fetch(`${API_BASE}/admin/api/${action}/${encodeURIComponent(clientId)}`, { 
         method: 'POST', headers: { 'Authorization': 'Basic ' + btoa('admin:' + adminPassword) } 
       });
       if (res.ok) {
@@ -48,7 +50,7 @@ export const AuthorizedAgents = () => {
                   className="btn-approve"
                   onClick={async () => {
                     try {
-                      const res = await fetch(`http://localhost:8081/admin/api/safety-number/${encodeURIComponent(req.client_id)}`, {
+                      const res = await fetch(`${API_BASE}/admin/api/safety-number/${encodeURIComponent(req.client_id)}`, {
                         headers: { 'Authorization': 'Basic ' + btoa('admin:' + adminPassword) }
                       });
                       if (res.ok) {

@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { toast } from 'sonner';
 import { useAppContext } from '../../contexts/AppContext';
 
+const API_BASE = import.meta.env.VITE_MCP_URL || 'http://localhost:8081';
+
 export const ScheduleSettings = () => {
   const { tasks, loading, loadData, adminPassword } = useAppContext();
   const [taskName, setTaskName] = useState("");
@@ -12,7 +14,7 @@ export const ScheduleSettings = () => {
     if (!taskName.trim() || !cronExpression.trim()) return;
 
     try {
-      const res = await fetch('http://localhost:8081/api/schedule', {
+      const res = await fetch(`${API_BASE}/api/schedule`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -36,7 +38,7 @@ export const ScheduleSettings = () => {
 
   const handleDeleteTask = async (id: number) => {
     try {
-      const res = await fetch(`http://localhost:8081/api/schedule/${id}`, {
+      const res = await fetch(`${API_BASE}/api/schedule/${id}`, {
         method: 'DELETE',
         headers: { 'Authorization': 'Basic ' + btoa('admin:' + adminPassword) }
       });
