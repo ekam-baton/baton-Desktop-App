@@ -156,7 +156,13 @@ impl StdioMcpClient {
 
         match result {
             Ok(inner) => inner,
-            Err(_elapsed) => Err(anyhow!("Agent timed out after {}s", RESPONSE_TIMEOUT_SECS)),
+            Err(_elapsed) => {
+                if let Some(ref mut child) = *child_guard {
+                    let _ = child.start_kill();
+                }
+                *child_guard = None;
+                Err(anyhow!("Agent timed out after {}s", RESPONSE_TIMEOUT_SECS))
+            }
         }
     }
 }

@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { toast } from 'sonner';
 import { useAppContext } from '../../contexts/AppContext';
 
+const API_BASE = import.meta.env.VITE_MCP_URL || 'http://localhost:8081';
+
 export const KnowledgeBaseSettings = () => {
   const { knowledgeDirs, loading, loadData, adminPassword } = useAppContext();
   const [newDirPath, setNewDirPath] = useState("");
@@ -11,7 +13,7 @@ export const KnowledgeBaseSettings = () => {
     if (!newDirPath.trim()) return;
 
     try {
-      const res = await fetch('http://localhost:8081/api/knowledge', {
+      const res = await fetch(`${API_BASE}/api/knowledge`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

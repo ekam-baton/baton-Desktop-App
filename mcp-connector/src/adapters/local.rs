@@ -2,7 +2,6 @@
 /// These connect to locally-running agent harnesses via IPC.
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use tracing::info;
 
 use super::AgentTransport;
 

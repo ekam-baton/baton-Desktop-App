@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use sqlx::{AnyPool, Row};
 use anyhow::Result;
 use uuid::Uuid;

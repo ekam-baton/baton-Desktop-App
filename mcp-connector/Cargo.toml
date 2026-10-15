@@ -51,5 +51,3 @@ wasmtime-wasi = { workspace = true }
 regex = { workspace = true }
 argon2 = "0.5.3"
 
-[lib]
-path = "src/main.rs"

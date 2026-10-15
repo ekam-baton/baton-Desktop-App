@@ -1,8 +1,7 @@
 /// Legacy adapter system — routes to local harnesses and agent frameworks.
 /// These wrap the original `AgentTransport` / `execute_tool` pattern.
 use async_trait::async_trait;
-use serde_json::{json, Value};
-use tracing::info;
+use serde_json::Value;
 
 pub mod local;
 pub mod frameworks;

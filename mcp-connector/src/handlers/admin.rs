@@ -8,7 +8,6 @@ use std::sync::Arc;
 use crate::state::AppState;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use axum::response::sse::{Event, Sse};
-use futures::stream::Stream;
 use std::convert::Infallible;
 use tokio::sync::mpsc;
 use crate::providers::{get_provider, ChatMessage, ChatOptions};
@@ -225,17 +224,17 @@ pub async fn admin_chat_handler(
     let options = payload.options.unwrap_or_default();
     let messages = payload.messages;
 
-    let provider_label = provider.name();
-    let timer = state.streaming_duration.with_label_values(&[provider_label]).start_timer();
-    state.active_connections.inc();
-    state.requests_total.with_label_values(&[provider_label, "success"]).inc();
-
     let permit = match state.llm_concurrency_limiter.clone().acquire_owned().await {
         Ok(p) => p,
         Err(_) => {
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Failed to acquire concurrency permit"}))).into_response();
         }
     };
+
+    let provider_label = provider.name();
+    let timer = state.streaming_duration.with_label_values(&[provider_label]).start_timer();
+    state.active_connections.inc();
+    state.requests_total.with_label_values(&[provider_label, "success"]).inc();
 
     tokio::spawn(async move {
         let _permit = permit;
@@ -245,16 +244,33 @@ pub async fn admin_chat_handler(
         }
     });
 
-    let state_clone = state.clone();
+    struct StreamGuard {
+        state: Arc<AppState>,
+        timer: Option<prometheus::HistogramTimer>,
+    }
+
+    impl Drop for StreamGuard {
+        fn drop(&mut self) {
+            if let Some(timer) = self.timer.take() {
+                timer.observe_duration();
+            }
+            self.state.active_connections.dec();
+        }
+    }
+
+    let guard = StreamGuard {
+        state: state.clone(),
+        timer: Some(timer),
+    };
+
     let stream = async_stream::stream! {
+        let _guard = guard;
         while let Some(res) = rx.recv().await {
             match res {
                 Ok(text) => yield Ok::<Event, Infallible>(Event::default().data(text)),
                 Err(e) => yield Ok::<Event, Infallible>(Event::default().event("error").data(e.to_string())),
             }
         }
-        timer.observe_duration();
-        state_clone.active_connections.dec();
     };
 
     Sse::new(stream).into_response()
