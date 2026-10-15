@@ -1,26 +1,3 @@
-import Olm from '@matrix-org/olm';
-
-export const initOlm = async () => {
-  await Olm.init();
-};
-
-export const generateOlmAccount = () => {
-  const account = new Olm.Account();
-  account.create();
-  return account;
-};
-
-export type OlmAccount = InstanceType<typeof Olm.Account>;
-
-export const generateOneTimeKeys = (account: OlmAccount, numberOfKeys: number = 50) => {
-  account.generate_one_time_keys(numberOfKeys);
-  return account.one_time_keys();
-};
-
-export const signData = (account: OlmAccount, message: string) => {
-  return account.sign(message);
-};
-
 export const encryptBackupKey = async (password: string, keyToBackup: Uint8Array): Promise<string> => {
   const enc = new TextEncoder();
   const passwordKey = await window.crypto.subtle.importKey(

@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import logo from '../assets/logo.png';
-import { initOlm, generateOlmAccount, generateOneTimeKeys } from '../utils/crypto';
 
 const API_BASE = import.meta.env.VITE_MCP_URL || 'http://localhost:8081';
 
@@ -21,31 +20,6 @@ export const AuthScreen = ({ onAuthenticated }: AuthScreenProps) => {
       });
       if (response.ok) {
         const data = await response.json();
-        
-        try {
-          await initOlm();
-          const account = generateOlmAccount();
-          const keysStr = generateOneTimeKeys(account, 50);
-          const keys = JSON.parse(keysStr);
-
-          // Persist the Olm account so we can decrypt incoming messages later
-          const encoder = new TextEncoder();
-          const keyBuffer = await crypto.subtle.digest('SHA-256', encoder.encode(password));
-          const pickledAccount = account.pickle(new Uint8Array(keyBuffer));
-          localStorage.setItem('baton_olm_account', pickledAccount);
-          
-          await fetch(`${API_BASE}/keys/upload`, {
-            method: 'POST',
-            headers: { 
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${data.token}`
-            },
-            body: JSON.stringify({ keys })
-          });
-        } catch (err) {
-          console.error('Failed to upload keys', err);
-        }
-
         onAuthenticated(data.token, data.refreshToken, data.subscriptionStatus);
       } else {
         alert('Invalid password');
