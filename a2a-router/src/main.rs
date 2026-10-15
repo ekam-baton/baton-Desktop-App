@@ -121,6 +121,7 @@ struct A2AMessage {
     payload: serde_json::Value,
 }
 
+#[allow(dead_code)]
 #[derive(Deserialize, Serialize)]
 struct OfflineMessageRecord {
     id: Uuid,
@@ -302,7 +303,7 @@ async fn handle_socket(socket: WebSocket, client_id: String, state: Arc<AppState
     let state_presence = state.clone();
     let p_key = presence_key.clone();
     
-    let mut presence_task = tokio::spawn(async move {
+    let presence_task = tokio::spawn(async move {
         loop {
             if let Ok(mut conn) = state_presence.redis_pool.get().await {
                 // Set presence with 30s TTL
