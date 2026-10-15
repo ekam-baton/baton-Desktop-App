@@ -18,11 +18,15 @@ const MAX_CONCURRENT_REQUESTS: usize = 50;
 const MIN_BACKOFF_SECS: u64 = 2;
 const MAX_BACKOFF_SECS: u64 = 60;
 
+pub const MAX_A2A_RECURSION_DEPTH: u32 = 3;
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct A2aEnvelope {
     pub sender_id: String,
     pub receiver_id: String,
     pub group_id: Option<String>,
+    #[serde(default)]
+    pub depth: u32,
     /// Base64-encoded payload.
     /// NOTE: Real E2EE (X25519 + AES-256-GCM) must be layered on top before launch.
     pub payload_encrypted: String,
@@ -194,6 +198,15 @@ async fn process_envelope(
 ) {
     use base64::{Engine as _, engine::general_purpose::STANDARD};
     use sqlx::Row;
+
+    // ── 0. Hard Loop Breaker: Recursion Depth / Hop Limit ────────────────────
+    if envelope.depth >= MAX_A2A_RECURSION_DEPTH {
+        warn!(
+            "A2A recursion circuit breaker triggered: depth {} >= limit {} from sender '{}'. Dropping message to prevent infinite loops and runaway costs.",
+            envelope.depth, MAX_A2A_RECURSION_DEPTH, envelope.sender_id
+        );
+        return;
+    }
 
     if let Some(ref gid) = envelope.group_id {
         info!("Processing group message for group {}", gid);
@@ -439,6 +452,7 @@ async fn process_envelope(
         sender_id: envelope.receiver_id.clone(),
         receiver_id: envelope.sender_id.clone(),
         group_id: envelope.group_id.clone(),
+        depth: envelope.depth.saturating_add(1),
         payload_encrypted: STANDARD.encode(&out_payload_json),
     };
 
@@ -454,3 +468,43 @@ async fn process_envelope(
         error!("A2A output channel closed — response dropped: {}", e);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_a2a_envelope_depth_default_and_roundtrip() {
+        let json_without_depth = r#"{
+            "sender_id": "alice",
+            "receiver_id": "bob",
+            "group_id": null,
+            "payload_encrypted": "test_payload"
+        }"#;
+
+        let env: A2aEnvelope = serde_json::from_str(json_without_depth).expect("Failed to deserialize envelope without depth");
+        assert_eq!(env.depth, 0);
+
+        let json_with_depth = r#"{
+            "sender_id": "alice",
+            "receiver_id": "bob",
+            "group_id": null,
+            "depth": 2,
+            "payload_encrypted": "test_payload"
+        }"#;
+
+        let env2: A2aEnvelope = serde_json::from_str(json_with_depth).expect("Failed to deserialize envelope with depth");
+        assert_eq!(env2.depth, 2);
+
+        let response = A2aEnvelope {
+            sender_id: env2.receiver_id.clone(),
+            receiver_id: env2.sender_id.clone(),
+            group_id: env2.group_id.clone(),
+            depth: env2.depth.saturating_add(1),
+            payload_encrypted: "resp".to_string(),
+        };
+        assert_eq!(response.depth, 3);
+        assert!(response.depth >= MAX_A2A_RECURSION_DEPTH);
+    }
+}
+
