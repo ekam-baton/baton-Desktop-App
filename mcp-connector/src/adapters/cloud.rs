@@ -26,7 +26,10 @@ impl AgentTransport for HuggingFaceAdapter {
             return Err("HUGGINGFACE_API_KEY is not configured".into());
         }
 
-        let client = reqwest::Client::new();
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(60))
+            .build()
+            .map_err(|e| e.to_string())?;
         let inputs = arguments.get("inputs").cloned().unwrap_or(arguments.clone());
 
         let resp = client
@@ -79,17 +82,31 @@ impl AgentTransport for PrivateCloudAdapter {
         }
         // Block access to private/loopback addresses
         let host = parsed_url.host_str().unwrap_or("");
+        let is_172_private = if host.starts_with("172.") {
+            let second_octet = host.split('.').nth(1).and_then(|s| s.parse::<u8>().ok()).unwrap_or(0);
+            (16..=31).contains(&second_octet)
+        } else {
+            false
+        };
+
         if host == "localhost"
             || host.starts_with("127.")
             || host.starts_with("10.")
             || host.starts_with("192.168.")
             || host.starts_with("169.254.")
+            || is_172_private
             || host == "[::1]"
+            || host.starts_with("[fc")
+            || host.starts_with("[fd")
+            || host.starts_with("[fe80")
         {
             return Err("PrivateCloud endpoint must not target internal addresses".into());
         }
 
-        let client = reqwest::Client::new();
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(60))
+            .build()
+            .map_err(|e| e.to_string())?;
         let resp = client
             .post(endpoint)
             .header(

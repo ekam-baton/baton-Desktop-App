@@ -1,25 +1,32 @@
+import { useState } from 'react';
 import { toast } from 'sonner';
 import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
 import { useAppContext } from '../../contexts/AppContext';
+import { basicAuthHeader } from '../../lib/utils';
 
 const API_BASE = import.meta.env.VITE_MCP_URL || 'http://localhost:8081';
 
 export const AuthorizedAgents = () => {
   const { authorized, loading, loadData, adminPassword } = useAppContext();
+  const [revokingId, setRevokingId] = useState<string | null>(null);
 
   const handleAction = async (clientId: string, action: 'revoke') => {
+    if (revokingId) return;
+    setRevokingId(clientId);
     try {
       const res = await fetch(`${API_BASE}/admin/api/${action}/${encodeURIComponent(clientId)}`, { 
-        method: 'POST', headers: { 'Authorization': 'Basic ' + btoa('admin:' + adminPassword) } 
+        method: 'POST', headers: { 'Authorization': basicAuthHeader(adminPassword) } 
       });
       if (res.ok) {
-        loadData();
+        await loadData();
       } else {
         toast.error('Action failed: ' + res.status);
       }
     } catch (err) {
       console.error(err);
       toast.error('Network error during action');
+    } finally {
+      setRevokingId(null);
     }
   };
 
@@ -38,7 +45,7 @@ export const AuthorizedAgents = () => {
             <div key={req.client_id} className="request-card">
               <div className="info">
                 <div className="client-name">{req.device_name || 'Unknown Device'}</div>
-                <div className="client-pubkey">ID: {req.client_id.substring(0, 16)}...</div>
+                <div className="client-pubkey">ID: {req.client_id ? `${req.client_id.slice(0, 16)}...` : 'Unknown'}</div>
                 <div className="telemetry-bar">
                   <span title="Battery Level">🔋 87%</span>
                   <span title="Connection Status">📶 5G UW</span>
@@ -51,7 +58,7 @@ export const AuthorizedAgents = () => {
                   onClick={async () => {
                     try {
                       const res = await fetch(`${API_BASE}/admin/api/safety-number/${encodeURIComponent(req.client_id)}`, {
-                        headers: { 'Authorization': 'Basic ' + btoa('admin:' + adminPassword) }
+                        headers: { 'Authorization': basicAuthHeader(adminPassword) }
                       });
                       if (res.ok) {
                         const data = await res.json();
@@ -85,6 +92,7 @@ export const AuthorizedAgents = () => {
                 </button>
                 <button 
                   className="btn-deny"
+                  disabled={revokingId === req.client_id}
                   onClick={() => handleAction(req.client_id, 'revoke')}
                 >
                   Revoke Access

@@ -78,20 +78,16 @@ pub async fn upload_handler(
             .map(|e| e.to_lowercase())
             .unwrap_or_default();
         
-        // Extension allowlist — reject executables and unknown types
-        if !ext.is_empty() && !ALLOWED_EXTENSIONS.contains(&ext.as_str()) {
-            warn!("Upload rejected: disallowed extension '.{}' from client", ext);
+        // Extension allowlist — reject executables, unknown types, and extensionless files
+        if ext.is_empty() || !ALLOWED_EXTENSIONS.contains(&ext.as_str()) {
+            warn!("Upload rejected: disallowed or missing extension '.{}' from client", ext);
             return (
                 StatusCode::UNPROCESSABLE_ENTITY,
                 Json(json!({"error": format!("File type '.{}' is not allowed", ext)}))
             ).into_response();
         }
         
-        let safe_filename = if ext.is_empty() {
-            file_id.clone()
-        } else {
-            format!("{}.{}", file_id, ext)
-        };
+        let safe_filename = format!("{}.{}", file_id, ext);
 
         let filepath = upload_dir.join(&safe_filename);
         let mut file = match File::create(&filepath).await {

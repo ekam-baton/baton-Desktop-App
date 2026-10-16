@@ -194,6 +194,8 @@ pub async fn revoke_handler(headers: axum::http::HeaderMap, axum::extract::Path(
     check_auth(&headers, &state.config.admin_password)?;
     if !client_id.chars().all(|c| c.is_ascii_hexdigit()) || client_id.len() > 64 { return Err(axum::http::StatusCode::BAD_REQUEST); }
     sqlx::query("UPDATE authorized_users SET status = 'revoked' WHERE client_id = $1").bind(&client_id).execute(&state.db).await.map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+    state.paired_devices.remove(&client_id);
+    state.mcp_clients.retain(|k, _| !k.ends_with(&format!(":{}", client_id)));
     Ok(axum::http::StatusCode::OK)
 }
 

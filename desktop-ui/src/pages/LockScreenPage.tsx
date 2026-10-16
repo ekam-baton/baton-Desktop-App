@@ -1,44 +1,56 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import logo from '../assets/logo.png';
 import { useAppContext } from '../contexts/AppContext';
 
 export const LockScreenPage = () => {
   const { pin, setPin, isShaking, setIsShaking, correctPin, setIsLocked } = useAppContext();
+  const shakeTimerRef = useRef<number | null>(null);
+  const resetTimerRef = useRef<number | null>(null);
+
+  const clearTimers = () => {
+    if (shakeTimerRef.current) window.clearTimeout(shakeTimerRef.current);
+    if (resetTimerRef.current) window.clearTimeout(resetTimerRef.current);
+  };
+
+  useEffect(() => {
+    return () => clearTimers();
+  }, []);
+
+  const appendDigit = (digit: string) => {
+    setPin(prev => {
+      if (prev.length >= 4) return prev;
+      const next = prev + digit;
+      if (next === correctPin) {
+        setIsLocked(false);
+      } else if (next.length === 4) {
+        clearTimers();
+        setIsShaking(true);
+        shakeTimerRef.current = window.setTimeout(() => setIsShaking(false), 300);
+        resetTimerRef.current = window.setTimeout(() => setPin(""), 350);
+      }
+      return next;
+    });
+  };
+
+  const removeDigit = () => {
+    setPin(prev => prev.slice(0, -1));
+  };
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key >= '0' && e.key <= '9') {
-        if (pin.length < 4) {
-          const newPin = pin + e.key;
-          setPin(newPin);
-          if (newPin === correctPin) {
-            setIsLocked(false);
-          } else if (newPin.length === 4) {
-            setIsShaking(true);
-            setTimeout(() => setIsShaking(false), 300);
-            setTimeout(() => setPin(""), 350);
-          }
-        }
+        appendDigit(e.key);
       } else if (e.key === 'Backspace' || e.key === 'Delete') {
-        setPin(pin.slice(0, -1));
+        removeDigit();
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [pin, correctPin, setPin, setIsLocked, setIsShaking]);
+  }, [correctPin]);
 
   const handleKeypadPress = (num: string) => {
-    if (pin.length < 4) {
-      const newPin = pin + num;
-      setPin(newPin);
-      if (newPin === correctPin) setIsLocked(false);
-      else if (newPin.length === 4) { 
-        setIsShaking(true); 
-        setTimeout(() => setIsShaking(false), 300); 
-        setTimeout(() => setPin(""), 350); 
-      }
-    }
+    appendDigit(num);
   };
 
   return (

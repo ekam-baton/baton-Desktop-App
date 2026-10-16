@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useEffect, useCallback, ReactNode, useRef } from 'react';
 import { invoke } from "@tauri-apps/api/core";
 import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
+import { basicAuthHeader } from '../lib/utils';
 
 const API_BASE = import.meta.env.VITE_MCP_URL || 'http://localhost:8081';
 
@@ -31,7 +32,7 @@ interface AppContextType {
   setJwtToken: (token: string | null) => void;
   setSubscriptionStatus: (status: string | null) => void;
   setIsLocked: (locked: boolean) => void;
-  setPin: (pin: string) => void;
+  setPin: React.Dispatch<React.SetStateAction<string>>;
   setIsShaking: (shaking: boolean) => void;
   loadData: () => Promise<void>;
   correctPin: string;
@@ -64,14 +65,22 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     invoke<string>('get_admin_password').then(setAdminPassword).catch(console.error);
   }, []);
 
+  const hasLoadedOnce = useRef(false);
+
   const loadData = useCallback(async (signal?: AbortSignal) => {
-    setLoading(true);
-    if (!adminPassword) return;
-    const headers = { 'Authorization': 'Basic ' + btoa('admin:' + adminPassword) };
+    if (!adminPassword) {
+      setLoading(false);
+      return;
+    }
+    if (!hasLoadedOnce.current) {
+      setLoading(true);
+    }
+    const headers = { 'Authorization': basicAuthHeader(adminPassword) };
     try {
-      await Promise.all([
-        fetch(`${API_BASE}/admin/api/pending`, { signal, headers }).then(res => { 
-          if (res.ok) return res.json().then(data => {
+      await Promise.allSettled([
+        fetch(`${API_BASE}/admin/api/pending`, { signal, headers }).then(async res => { 
+          if (res.ok) {
+            const data = await res.json();
             if (data.length > previousPendingCount.current) {
               isPermissionGranted().then(granted => {
                 if (granted) sendNotification({ title: 'Baton', body: 'New agent requesting access!' });
@@ -80,36 +89,40 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
             }
             previousPendingCount.current = data.length;
             setRequests(data);
-          }); 
+          }
         }),
-        fetch(`${API_BASE}/admin/api/authorized`, { signal, headers }).then(res => { if (res.ok) return res.json().then(setAuthorized); }),
-        fetch(`${API_BASE}/api/audit`, { signal, headers }).then(res => { if (res.ok) return res.json().then(setAuditLogs); }),
-        fetch(`${API_BASE}/api/schedule`, { signal, headers }).then(res => { if (res.ok) return res.json().then(setTasks); }),
-        fetch(`${API_BASE}/api/permissions`, { signal, headers }).then(res => { if (res.ok) return res.json().then(setPermissions); }),
-        fetch(`${API_BASE}/api/inbox`, { signal, headers }).then(res => { if (res.ok) return res.json().then(setInboxFiles); }),
-        fetch(`${API_BASE}/api/knowledge`, { signal, headers }).then(res => { if (res.ok) return res.json().then(setKnowledgeDirs); }),
-        fetch(`${API_BASE}/admin/api/groups`, { signal, headers }).then(res => { if (res.ok) return res.json().then(setGroups); })
+        fetch(`${API_BASE}/admin/api/authorized`, { signal, headers }).then(async res => { if (res.ok) setAuthorized(await res.json()); }),
+        fetch(`${API_BASE}/api/audit`, { signal, headers }).then(async res => { if (res.ok) setAuditLogs(await res.json()); }),
+        fetch(`${API_BASE}/api/schedule`, { signal, headers }).then(async res => { if (res.ok) setTasks(await res.json()); }),
+        fetch(`${API_BASE}/api/permissions`, { signal, headers }).then(async res => { if (res.ok) setPermissions(await res.json()); }),
+        fetch(`${API_BASE}/api/inbox`, { signal, headers }).then(async res => { if (res.ok) setInboxFiles(await res.json()); }),
+        fetch(`${API_BASE}/api/knowledge`, { signal, headers }).then(async res => { if (res.ok) setKnowledgeDirs(await res.json()); }),
+        fetch(`${API_BASE}/admin/api/groups`, { signal, headers }).then(async res => { if (res.ok) setGroups(await res.json()); })
       ]);
     } catch (err: unknown) {
       if (err instanceof Error && err.name !== 'AbortError') {
         console.error(err);
       }
+    } finally {
+      hasLoadedOnce.current = true;
+      setLoading(false);
     }
-    setLoading(false);
   }, [adminPassword]);
 
   useEffect(() => {
     if (!jwtToken || subscriptionStatus !== 'premium' || isLocked) return;
-    const controller = new AbortController();
-    loadData(controller.signal);
+    const initialController = new AbortController();
+    loadData(initialController.signal);
+
     const interval = setInterval(() => {
-      loadData(controller.signal);
+      loadData();
     }, 5000);
+
     return () => {
       clearInterval(interval);
-      controller.abort();
+      initialController.abort();
     };
-  }, [adminPassword, jwtToken, subscriptionStatus, isLocked]);
+  }, [adminPassword, jwtToken, subscriptionStatus, isLocked, loadData]);
 
   return (
     <AppContext.Provider value={{

@@ -3,6 +3,7 @@ import { MessageSquare, Trash2, Plus, MessageCircle, PanelLeftClose, PanelLeftOp
 import { toast } from 'sonner';
 import logo from '../assets/logo.png';
 import { useAppContext } from '../contexts/AppContext';
+import { basicAuthHeader } from '../lib/utils';
 import ReactMarkdown from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
@@ -36,10 +37,11 @@ export const ChatPage = () => {
   const [showSessions, setShowSessions] = useState(true);
   const [isStreaming, setIsStreaming] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const activeStreamAbortRef = useRef<AbortController | null>(null);
 
   const getAuthHeaders = useCallback(() => ({
     'Content-Type': 'application/json',
-    'Authorization': 'Basic ' + btoa('admin:' + adminPassword)
+    'Authorization': basicAuthHeader(adminPassword)
   }), [adminPassword]);
 
   // Load all sessions from the persistent database
@@ -75,17 +77,20 @@ export const ChatPage = () => {
   }, [getAuthHeaders]);
 
   // Load messages whenever active session changes
-  const loadMessages = useCallback(async (sessionId: string) => {
+  const loadMessages = useCallback(async (sessionId: string, signal?: AbortSignal) => {
     try {
       const res = await fetch(`${API_BASE}/admin/api/sessions/${sessionId}/messages`, {
-        headers: getAuthHeaders()
+        headers: getAuthHeaders(),
+        signal
       });
       if (res.ok) {
         const msgs: StoredMessage[] = await res.json();
         setChatHistory(msgs);
       }
     } catch (err) {
-      console.error("Failed to load messages for session:", err);
+      if (err instanceof Error && err.name !== 'AbortError') {
+        console.error("Failed to load messages for session:", err);
+      }
     }
   }, [getAuthHeaders]);
 
@@ -94,14 +99,27 @@ export const ChatPage = () => {
   }, [loadSessions]);
 
   useEffect(() => {
+    const controller = new AbortController();
     if (activeSessionId) {
-      loadMessages(activeSessionId);
+      loadMessages(activeSessionId, controller.signal);
     }
+    return () => {
+      controller.abort();
+    };
   }, [activeSessionId, loadMessages]);
 
   useEffect(() => {
     if (chatEndRef.current) chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
   }, [chatHistory]);
+
+  const switchSession = (sessionId: string) => {
+    if (activeStreamAbortRef.current) {
+      activeStreamAbortRef.current.abort();
+      activeStreamAbortRef.current = null;
+      setIsStreaming(false);
+    }
+    setActiveSessionId(sessionId);
+  };
 
   const createNewSession = async () => {
     try {
@@ -125,21 +143,26 @@ export const ChatPage = () => {
 
   const deleteSession = async (sessionId: string) => {
     try {
-      await fetch(`${API_BASE}/admin/api/sessions/${sessionId}`, {
+      const res = await fetch(`${API_BASE}/admin/api/sessions/${sessionId}`, {
         method: 'DELETE',
         headers: getAuthHeaders()
       });
-      const remaining = sessions.filter(s => s.id !== sessionId);
-      setSessions(remaining);
-      if (activeSessionId === sessionId) {
-        if (remaining.length > 0) {
-          setActiveSessionId(remaining[0].id);
-        } else {
-          setActiveSessionId(null);
-          setChatHistory([]);
-          createNewSession();
-        }
+      if (!res.ok) {
+        throw new Error(`Delete failed with status ${res.status}`);
       }
+      setSessions(prev => {
+        const remaining = prev.filter(s => s.id !== sessionId);
+        if (activeSessionId === sessionId) {
+          if (remaining.length > 0) {
+            setActiveSessionId(remaining[0].id);
+          } else {
+            setActiveSessionId(null);
+            setChatHistory([]);
+            createNewSession();
+          }
+        }
+        return remaining;
+      });
       toast.success("Session deleted.");
     } catch {
       toast.error("Failed to delete session.");
@@ -149,10 +172,13 @@ export const ChatPage = () => {
   const clearChat = async () => {
     if (!activeSessionId) return;
     try {
-      await fetch(`${API_BASE}/admin/api/sessions/${activeSessionId}/messages`, {
+      const res = await fetch(`${API_BASE}/admin/api/sessions/${activeSessionId}/messages`, {
         method: 'DELETE',
         headers: getAuthHeaders()
       });
+      if (!res.ok) {
+        throw new Error(`Clear chat failed with status ${res.status}`);
+      }
       setChatHistory([]);
       toast.success("Chat history cleared from database.");
     } catch {
@@ -202,11 +228,14 @@ export const ChatPage = () => {
 
     // Call LLM streaming endpoint
     setIsStreaming(true);
+    const abortController = new AbortController();
+    activeStreamAbortRef.current = abortController;
     let agentResponseText = '';
     try {
       const response = await fetch(`${API_BASE}/admin/api/chat`, {
         method: 'POST',
         headers: getAuthHeaders(),
+        signal: abortController.signal,
         body: JSON.stringify({
           messages: [...chatHistory, { role: 'user', content: msg }].map(m => ({
             role: (m.role === 'agent' || m.role === 'assistant') ? 'assistant' : m.role,
@@ -232,21 +261,24 @@ export const ChatPage = () => {
       setChatHistory(prev => [...prev, { role: 'assistant', content: '' }]);
 
       if (reader) {
+        let buffer = '';
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
-          const chunk = decoder.decode(value);
-          const lines = chunk.split('\n');
-          for (const line of lines) {
-            if (line.startsWith('data: ')) {
-              const data = line.slice(6);
-              agentResponseText += data;
-              setChatHistory(prev => {
-                if (prev.length === 0) return prev;
-                const last = prev[prev.length - 1];
-                return [...prev.slice(0, -1), { ...last, content: agentResponseText }];
-              });
-            }
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() ?? '';
+          for (const rawLine of lines) {
+            const line = rawLine.replace(/\r$/, '');
+            if (!line.startsWith('data: ')) continue;
+            const data = line.slice(6);
+            if (data === '[DONE]') break;
+            agentResponseText += data;
+            setChatHistory(prev => {
+              if (prev.length === 0) return prev;
+              const last = prev[prev.length - 1];
+              return [...prev.slice(0, -1), { ...last, content: agentResponseText }];
+            });
           }
         }
       }
@@ -260,9 +292,21 @@ export const ChatPage = () => {
         });
       }
     } catch (err: unknown) {
+      if (err instanceof Error && err.name === 'AbortError') {
+        return;
+      }
       const errMsg = err instanceof Error ? err.message : "Failed to communicate with agent.";
       toast.error(errMsg);
+      setChatHistory(prev => {
+        if (prev.length === 0) return prev;
+        const last = prev[prev.length - 1];
+        if (last.role === 'assistant' && !last.content) {
+          return [...prev.slice(0, -1), { ...last, content: `⚠️ Failed: ${errMsg}` }];
+        }
+        return prev;
+      });
     } finally {
+      activeStreamAbortRef.current = null;
       setIsStreaming(false);
     }
   };
@@ -290,7 +334,7 @@ export const ChatPage = () => {
             {sessions.map(s => (
               <div
                 key={s.id}
-                onClick={() => setActiveSessionId(s.id)}
+                onClick={() => switchSession(s.id)}
                 className={`group flex items-center justify-between p-2.5 rounded-xl cursor-pointer text-xs transition-colors ${
                   s.id === activeSessionId
                     ? 'bg-white/15 text-white font-medium'

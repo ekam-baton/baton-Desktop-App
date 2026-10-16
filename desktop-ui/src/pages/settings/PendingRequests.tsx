@@ -1,24 +1,31 @@
+import { useState } from 'react';
 import { toast } from 'sonner';
 import { useAppContext } from '../../contexts/AppContext';
+import { basicAuthHeader } from '../../lib/utils';
 
 const API_BASE = import.meta.env.VITE_MCP_URL || 'http://localhost:8081';
 
 export const PendingRequests = () => {
   const { requests, loading, loadData, adminPassword } = useAppContext();
+  const [processingId, setProcessingId] = useState<string | null>(null);
 
   const handleAction = async (clientId: string, action: 'approve' | 'deny') => {
+    if (processingId) return;
+    setProcessingId(clientId);
     try {
       const res = await fetch(`${API_BASE}/admin/api/${action}/${encodeURIComponent(clientId)}`, { 
-        method: 'POST', headers: { 'Authorization': 'Basic ' + btoa('admin:' + adminPassword) } 
+        method: 'POST', headers: { 'Authorization': basicAuthHeader(adminPassword) } 
       });
       if (res.ok) {
-        loadData();
+        await loadData();
       } else {
         toast.error('Action failed: ' + res.status);
       }
     } catch (err) {
       console.error(err);
       toast.error('Network error during action');
+    } finally {
+      setProcessingId(null);
     }
   };
 
@@ -37,15 +44,16 @@ export const PendingRequests = () => {
             <div key={req.client_id} className="request-card">
               <div className="info">
                 <div className="client-name">{req.device_name || 'Unknown Device'}</div>
-                <div className="client-pubkey">ID: {req.client_id.substring(0, 16)}...</div>
+                <div className="client-pubkey">ID: {req.client_id ? `${req.client_id.slice(0, 16)}...` : 'Unknown'}</div>
               </div>
               <div className="actions">
                 <button 
                   className="btn-approve"
+                  disabled={processingId === req.client_id}
                   onClick={async () => {
                     try {
                       const res = await fetch(`${API_BASE}/admin/api/safety-number/${encodeURIComponent(req.client_id)}`, {
-                        headers: { 'Authorization': 'Basic ' + btoa('admin:' + adminPassword) }
+                        headers: { 'Authorization': basicAuthHeader(adminPassword) }
                       });
                       if (res.ok) {
                         const data = await res.json();
@@ -60,8 +68,20 @@ export const PendingRequests = () => {
                 >
                   Verify Identity
                 </button>
-                <button className="btn-approve" onClick={() => handleAction(req.client_id, 'approve')}>Approve</button>
-                <button className="btn-deny" onClick={() => handleAction(req.client_id, 'deny')}>Deny</button>
+                <button 
+                  className="btn-approve" 
+                  disabled={processingId === req.client_id}
+                  onClick={() => handleAction(req.client_id, 'approve')}
+                >
+                  Approve
+                </button>
+                <button 
+                  className="btn-deny" 
+                  disabled={processingId === req.client_id}
+                  onClick={() => handleAction(req.client_id, 'deny')}
+                >
+                  Deny
+                </button>
               </div>
             </div>
           ))

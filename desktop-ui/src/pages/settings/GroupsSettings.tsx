@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { toast } from 'sonner';
 import { useAppContext } from '../../contexts/AppContext';
+import { basicAuthHeader } from '../../lib/utils';
 
 const API_BASE = import.meta.env.VITE_MCP_URL || 'http://localhost:8081';
 
@@ -18,7 +19,7 @@ export const GroupsSettings = () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': 'Basic ' + btoa('admin:' + adminPassword)
+          'Authorization': basicAuthHeader(adminPassword)
         },
         body: JSON.stringify({ name: groupName.trim(), member_ids: selectedMembers })
       });
@@ -40,7 +41,7 @@ export const GroupsSettings = () => {
     try {
       const res = await fetch(`${API_BASE}/admin/api/group/${encodeURIComponent(id)}`, {
         method: 'DELETE',
-        headers: { 'Authorization': 'Basic ' + btoa('admin:' + adminPassword) }
+        headers: { 'Authorization': basicAuthHeader(adminPassword) }
       });
       if (res.ok) {
         toast.success('Group deleted');
@@ -90,7 +91,7 @@ export const GroupsSettings = () => {
                       checked={selectedMembers.includes(agent.client_id)}
                       onChange={() => toggleMember(agent.client_id)}
                     />
-                    {agent.device_name || 'Unknown Device'} ({agent.client_id.substring(0, 8)}...)
+                    {agent.device_name || 'Unknown Device'} ({agent.client_id ? `${agent.client_id.slice(0, 8)}...` : 'Unknown'})
                   </label>
                 ))
               )}
@@ -111,8 +112,8 @@ export const GroupsSettings = () => {
           groups.map((group) => (
             <div key={group.id} className="request-card">
               <div className="info">
-                <div className="client-name">{group.name}</div>
-                <div className="client-pubkey">Members: {group.member_ids.length} • ID: {group.id.substring(0, 8)}...</div>
+                <div className="client-name">{group.name || 'Unnamed Group'}</div>
+                <div className="client-pubkey">Members: {group.member_ids?.length ?? 0} • ID: {group.id ? `${group.id.slice(0, 8)}...` : 'Unknown'}</div>
               </div>
               <div className="actions">
                 <button className="btn-deny" onClick={() => handleDeleteGroup(group.id)}>Delete</button>

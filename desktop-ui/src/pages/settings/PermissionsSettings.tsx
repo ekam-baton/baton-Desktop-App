@@ -1,4 +1,6 @@
+import { toast } from 'sonner';
 import { useAppContext } from '../../contexts/AppContext';
+import { basicAuthHeader } from '../../lib/utils';
 import { ShieldCheck, ShieldAlert } from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_MCP_URL || 'http://localhost:8081';
@@ -8,14 +10,19 @@ export const PermissionsSettings = () => {
 
   const handleTogglePermission = async (key: string, currentValue: boolean) => {
     try {
-      await fetch(`${API_BASE}/api/permissions/${encodeURIComponent(key)}`, {
+      const res = await fetch(`${API_BASE}/api/permissions/${encodeURIComponent(key)}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': 'Basic ' + btoa('admin:' + adminPassword) },
+        headers: { 'Content-Type': 'application/json', 'Authorization': basicAuthHeader(adminPassword) },
         body: JSON.stringify({ value: !currentValue })
       });
-      loadData();
+      if (res.ok) {
+        await loadData();
+      } else {
+        toast.error('Failed to update permission');
+      }
     } catch (err) {
       console.error(err);
+      toast.error('Network error updating permission');
     }
   };
 

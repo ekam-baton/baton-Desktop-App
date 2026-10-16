@@ -1,12 +1,14 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { toast } from 'sonner';
 import { useAppContext } from '../../contexts/AppContext';
+import { basicAuthHeader } from '../../lib/utils';
 
 const API_BASE = import.meta.env.VITE_MCP_URL || 'http://localhost:8081';
 
 export const HandoffSettings = () => {
   const { adminPassword } = useAppContext();
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleUpload = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -19,7 +21,7 @@ export const HandoffSettings = () => {
       const res = await fetch(`${API_BASE}/api/handoff/upload`, {
         method: 'POST',
         headers: {
-          'Authorization': 'Basic ' + btoa('admin:' + adminPassword)
+          'Authorization': basicAuthHeader(adminPassword)
         },
         body: formData
       });
@@ -27,6 +29,9 @@ export const HandoffSettings = () => {
       if (res.ok) {
         toast.success('Context successfully pushed to mobile agent');
         setSelectedFile(null);
+        if (fileInputRef.current) {
+          fileInputRef.current.value = '';
+        }
       } else {
         toast.error('Failed to push context');
       }
@@ -45,6 +50,7 @@ export const HandoffSettings = () => {
           
           <div style={{ border: '2px dashed var(--border)', padding: '3rem', borderRadius: '12px', textAlign: 'center', width: '100%', cursor: 'pointer' }}>
             <input 
+              ref={fileInputRef}
               type="file" 
               onChange={(e) => {
                 if (e.target.files && e.target.files[0]) setSelectedFile(e.target.files[0]);

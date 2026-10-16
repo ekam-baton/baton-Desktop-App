@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { toast } from 'sonner';
 import { useAppContext } from '../../contexts/AppContext';
+import { basicAuthHeader } from '../../lib/utils';
 
 const API_BASE = import.meta.env.VITE_MCP_URL || 'http://localhost:8081';
 
@@ -17,7 +18,7 @@ export const KnowledgeBaseSettings = () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': 'Basic ' + btoa('admin:' + adminPassword)
+          'Authorization': basicAuthHeader(adminPassword)
         },
         body: JSON.stringify({ directory_path: newDirPath.trim() })
       });

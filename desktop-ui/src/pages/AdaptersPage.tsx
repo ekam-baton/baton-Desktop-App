@@ -86,8 +86,12 @@ export const AdaptersPage: React.FC = () => {
     setStatusInfo(null);
     setStatusError(false);
 
-    fetch(selectedAdapter.url + '/mgmt/status', {
-      headers: { 'Mgmt-Api-Key': activeApiKey }
+    const controller = new AbortController();
+    const baseUrl = selectedAdapter.url.replace(/\/+$/, '');
+
+    fetch(`${baseUrl}/mgmt/status`, {
+      headers: { 'Mgmt-Api-Key': activeApiKey },
+      signal: controller.signal
     })
       .then(res => {
         if (res.status === 501) return { status: 'not_available' };
@@ -95,17 +99,29 @@ export const AdaptersPage: React.FC = () => {
         return res.json();
       })
       .then(data => setStatusInfo(data))
-      .catch(() => setStatusError(true));
+      .catch((err) => {
+        if (err instanceof Error && err.name !== 'AbortError') {
+          setStatusError(true);
+        }
+      });
+
+    return () => {
+      controller.abort();
+    };
   }, [selectedAdapter, activeApiKey]);
 
   useEffect(() => {
     if (!selectedAdapter || !activeApiKey) return;
     
-    setLogs(['Connecting to management API...', 'Connected to ' + selectedAdapter.url]);
+    const baseUrl = selectedAdapter.url.replace(/\/+$/, '');
+    setLogs(['Connecting to management API...', 'Connected to ' + baseUrl]);
     
-    const interval = setInterval(() => {
-      fetch(selectedAdapter.url + '/mgmt/logs', {
-        headers: { 'Mgmt-Api-Key': activeApiKey }
+    const controller = new AbortController();
+
+    const fetchLogs = () => {
+      fetch(`${baseUrl}/mgmt/logs`, {
+        headers: { 'Mgmt-Api-Key': activeApiKey },
+        signal: controller.signal
       })
       .then(res => {
          if (!res.ok) throw new Error('Fetch failed');
@@ -118,12 +134,20 @@ export const AdaptersPage: React.FC = () => {
            setLogs([JSON.stringify(data)]);
          }
       })
-      .catch(() => {
-         setLogs(prev => [...prev.slice(-19), `[${new Date().toLocaleTimeString()}] Connection error`]);
+      .catch((err) => {
+         if (err instanceof Error && err.name !== 'AbortError') {
+           setLogs(prev => [...prev.slice(-19), `[${new Date().toLocaleTimeString()}] Connection error`]);
+         }
       });
-    }, 3000);
+    };
+
+    fetchLogs();
+    const interval = setInterval(fetchLogs, 3000);
     
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      controller.abort();
+    };
   }, [selectedAdapter, activeApiKey]);
 
   return (
@@ -287,7 +311,7 @@ export const AdaptersPage: React.FC = () => {
             <div className="form-group" style={{ marginBottom: '24px' }}>
               <label style={{ display: 'block', marginBottom: '8px' }}>Management API Key for {pendingAdapter.name}:</label>
               <input 
-                type="text" 
+                type="password" 
                 value={promptInput} 
                 onChange={e => setPromptInput(e.target.value)} 
                 placeholder="Enter API Key"

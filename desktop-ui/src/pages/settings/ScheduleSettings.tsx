@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { toast } from 'sonner';
 import { useAppContext } from '../../contexts/AppContext';
+import { basicAuthHeader } from '../../lib/utils';
 
 const API_BASE = import.meta.env.VITE_MCP_URL || 'http://localhost:8081';
 
@@ -18,7 +19,7 @@ export const ScheduleSettings = () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': 'Basic ' + btoa('admin:' + adminPassword)
+          'Authorization': basicAuthHeader(adminPassword)
         },
         body: JSON.stringify({ task_name: taskName.trim(), cron_expression: cronExpression.trim() })
       });
@@ -40,7 +41,7 @@ export const ScheduleSettings = () => {
     try {
       const res = await fetch(`${API_BASE}/api/schedule/${id}`, {
         method: 'DELETE',
-        headers: { 'Authorization': 'Basic ' + btoa('admin:' + adminPassword) }
+        headers: { 'Authorization': basicAuthHeader(adminPassword) }
       });
       if (res.ok) {
         toast.success('Task removed');

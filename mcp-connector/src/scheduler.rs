@@ -29,8 +29,20 @@ pub async fn start_scheduler(state: Arc<AppState>) {
         
         for row in tasks {
             use sqlx::Row;
-            let task_name: String = row.get("task_name");
-            let cron_expression: String = row.get("cron_expression");
+            let task_name: String = match row.try_get("task_name") {
+                Ok(name) => name,
+                Err(e) => {
+                    error!("Scheduler invalid task_name: {}", e);
+                    continue;
+                }
+            };
+            let cron_expression: String = match row.try_get("cron_expression") {
+                Ok(cron) => cron,
+                Err(e) => {
+                    error!("Scheduler invalid cron_expression: {}", e);
+                    continue;
+                }
+            };
 
             info!("Scheduler executing task (mock): {} (Cron: {})", task_name, cron_expression);
             
