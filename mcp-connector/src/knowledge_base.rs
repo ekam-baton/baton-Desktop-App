@@ -48,8 +48,18 @@ impl KnowledgeBase {
         query: &str,
         limit: usize,
     ) -> Result<Vec<KnowledgeChunk>> {
-        // Escape query for FTS5 (treat as literal phrase)
-        let fts_query = format!("\"{}\"", query.replace("\"", "\"\""));
+        let clean_query = query.trim();
+        if clean_query.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Escape query for FTS5 (strip quotes and wrap in quotes for literal phrase search)
+        let sanitized = clean_query.replace('"', " ");
+        let sanitized_trimmed = sanitized.trim();
+        if sanitized_trimmed.is_empty() {
+            return Ok(Vec::new());
+        }
+        let fts_query = format!("\"{}\"", sanitized_trimmed);
 
         // Retrieve ONLY the chunks for this namespace using FTS5 MATCH
         let rows = sqlx::query(
@@ -68,8 +78,8 @@ impl KnowledgeBase {
         let mut results: Vec<KnowledgeChunk> = Vec::with_capacity(rows.len());
 
         for row in rows {
-            let title: String = row.get("document_title");
-            let content: String = row.get("content");
+            let title: String = row.try_get("document_title").unwrap_or_default();
+            let content: String = row.try_get("content").unwrap_or_default();
 
             let chunk = KnowledgeChunk {
                 document_title: title,
@@ -88,5 +98,32 @@ impl KnowledgeBase {
         words.chunks(chunk_size_words)
             .map(|chunk| chunk.join(" "))
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_chunk_text() {
+        let text = "one two three four five";
+        let chunks = KnowledgeBase::chunk_text(text, 2);
+        assert_eq!(chunks, vec!["one two", "three four", "five"]);
+    }
+
+    #[test]
+    fn test_empty_query_sanitization() {
+        let empty = "   ";
+        assert!(empty.trim().is_empty());
+
+        let quotes = "\"\"\"";
+        let sanitized = quotes.trim().replace('"', " ");
+        assert!(sanitized.trim().is_empty());
+
+        let valid = " financial report ";
+        let sanitized_valid = valid.trim().replace('"', " ");
+        let fts = format!("\"{}\"", sanitized_valid.trim());
+        assert_eq!(fts, "\"financial report\"");
     }
 }

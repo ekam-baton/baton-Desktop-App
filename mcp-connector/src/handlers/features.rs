@@ -96,12 +96,16 @@ pub async fn update_permission(
     Json(payload): Json<UpdatePermissionReq>,
 ) -> Result<StatusCode, StatusCode> {
     check_auth(&headers, &state.config.admin_password)?;
-    sqlx::query("UPDATE permissions SET value = $1 WHERE key = $2")
+    let res = sqlx::query("UPDATE permissions SET value = $1 WHERE key = $2")
         .bind(payload.value)
         .bind(&key)
         .execute(&state.db)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if res.rows_affected() == 0 {
+        return Err(StatusCode::NOT_FOUND);
+    }
     
     sqlx::query("INSERT INTO audit_logs (event_type, detail, severity) VALUES ($1, $2, 'warning')")
         .bind("PERMISSION_CHANGED")
@@ -202,20 +206,25 @@ pub async fn create_knowledge(
     Json(payload): Json<CreateKnowledgeReq>,
 ) -> Result<StatusCode, StatusCode> {
     check_auth(&headers, &state.config.admin_password)?;
+    let trimmed_path = payload.directory_path.trim();
+    if trimmed_path.is_empty() || trimmed_path.len() > 1024 {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
     // Mock Vector DB indexing: just record the directory
     // In a real implementation this would use 'ort' or 'candle' to embed files
     let file_count = 42; // Mock count
     
     sqlx::query("INSERT INTO knowledge_base (directory_path, file_count) VALUES ($1, $2)")
-        .bind(&payload.directory_path)
+        .bind(trimmed_path)
         .bind(file_count)
         .execute(&state.db)
         .await
-        .ok();
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         
     sqlx::query("INSERT INTO audit_logs (event_type, detail, severity) VALUES ($1, $2, 'info')")
         .bind("KNOWLEDGE_INDEXED")
-        .bind(format!("Indexed {} files in directory '{}' into local vector DB.", file_count, payload.directory_path))
+        .bind(format!("Indexed {} files in directory '{}' into local vector DB.", file_count, trimmed_path))
         .execute(&state.db)
         .await
         .ok();
