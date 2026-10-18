@@ -220,6 +220,28 @@ pub async fn admin_chat_handler(
         }
     };
 
+    // ── DLP Pre-Flight: scan all message content before calling LLM (Pillar 5) ──
+    let combined_prompt: String = payload.messages.iter()
+        .map(|m| m.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let dlp_violations = state.dlp_engine.scan(&combined_prompt);
+    if !dlp_violations.is_empty() {
+        let labels: Vec<&str> = dlp_violations.iter().map(|v| v.label).collect();
+        tracing::warn!(
+            "🛡️ DLP BLOCK: admin chat prompt to '{}' contains sensitive data patterns: {:?}. Request blocked.",
+            provider_name, labels
+        );
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "error": "DLP Policy Violation",
+                "detail": format!("Request blocked: potential sensitive data detected ({}).", labels.join(", ")),
+                "patterns": labels,
+            }))
+        ).into_response();
+    }
+
     tracing::info!("Admin streaming chat via provider: {}", provider.name());
     let (tx, mut rx) = mpsc::channel(100);
     

@@ -26,7 +26,7 @@ fn validate_target(name: &str) -> bool {
         && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
-fn get_or_spawn_client(
+pub fn get_or_spawn_client(
     state: &Arc<AppState>,
     target: &str,
     client_id: &str,

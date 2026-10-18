@@ -398,13 +398,19 @@ async fn process_envelope(
     }
 
     // ── 5. Route to the correct MCP agent ────────────────────────────────────
-    let target = state.mcp_clients.iter().next().map(|e| e.key().clone())
-        .unwrap_or_else(|| "openclaw".to_string());
+    let client = if let Some(c) = state.mcp_clients.get(&format!("openclaw:{}", envelope.sender_id)) {
+        Some(c.clone())
+    } else {
+        let target = state.config.mcp_agents.keys().next().cloned()
+            .unwrap_or_else(|| "openclaw".to_string());
+        crate::handlers::mcp::get_or_spawn_client(&state, &target, &envelope.sender_id)
+            .or_else(|| state.mcp_clients.iter().next().map(|e| e.value().clone()))
+    };
 
-    let client = match state.mcp_clients.get(&target) {
-        Some(c) => c.clone(),
+    let client = match client {
+        Some(c) => c,
         None => {
-            error!("No MCP agent available to handle A2A request");
+            error!("No MCP agent available to handle A2A request from '{}'", envelope.sender_id);
             return;
         }
     };
