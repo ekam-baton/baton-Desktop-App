@@ -384,7 +384,10 @@ pub async fn create_group_handler(
 
     let req_body = serde_json::json!({
         "group_id": group_id,
+        "group_name": payload.name,
         "name": payload.name,
+        "creator_id": creator_id,
+        "member_ids": members_with_creator,
         "members": members_with_creator,
     });
 
