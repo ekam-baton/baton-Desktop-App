@@ -66,12 +66,14 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   }, []);
 
   const hasLoadedOnce = useRef(false);
+  const isFetchingRef = useRef(false);
 
   const loadData = useCallback(async (signal?: AbortSignal) => {
-    if (!adminPassword) {
-      setLoading(false);
+    if (!adminPassword || isFetchingRef.current) {
+      if (!adminPassword) setLoading(false);
       return;
     }
+    isFetchingRef.current = true;
     if (!hasLoadedOnce.current) {
       setLoading(true);
     }
@@ -104,6 +106,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
         console.error(err);
       }
     } finally {
+      isFetchingRef.current = false;
       hasLoadedOnce.current = true;
       setLoading(false);
     }
@@ -111,16 +114,17 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
 
   useEffect(() => {
     if (!jwtToken || subscriptionStatus !== 'premium' || isLocked) return;
-    const initialController = new AbortController();
-    loadData(initialController.signal);
+    let abortController = new AbortController();
+    loadData(abortController.signal);
 
     const interval = setInterval(() => {
-      loadData();
+      abortController = new AbortController();
+      loadData(abortController.signal);
     }, 5000);
 
     return () => {
       clearInterval(interval);
-      initialController.abort();
+      abortController.abort();
     };
   }, [adminPassword, jwtToken, subscriptionStatus, isLocked, loadData]);
 

@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, Command};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
+use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tracing::info;
 use tokio::sync::Mutex;
 use anyhow::{anyhow, Result};
@@ -17,8 +17,14 @@ const RESPONSE_TIMEOUT_SECS: u64 = 30;
 /// Default memory cap for Wasm sandboxed tools (128 MB).
 const WASM_DEFAULT_MEMORY_MB: u64 = 128;
 
+struct ActiveProcess {
+    child: Child,
+    stdin: ChildStdin,
+    lines: Lines<BufReader<ChildStdout>>,
+}
+
 pub struct StdioMcpClient {
-    child: Mutex<Option<Child>>,
+    process: Mutex<Option<ActiveProcess>>,
     cmd: String,
     args: Vec<String>,
     /// Directories to grant to Wasm tools. Empty = zero FS access.
@@ -28,7 +34,7 @@ pub struct StdioMcpClient {
 impl StdioMcpClient {
     pub fn new(cmd: String, args: Vec<String>) -> Self {
         Self {
-            child: Mutex::new(None),
+            process: Mutex::new(None),
             cmd,
             args,
             wasm_granted_dirs: vec![],
@@ -38,16 +44,16 @@ impl StdioMcpClient {
     /// Create a client with explicit Wasm directory grants.
     pub fn new_wasm(cmd: String, args: Vec<String>, granted_dirs: Vec<PathBuf>) -> Self {
         Self {
-            child: Mutex::new(None),
+            process: Mutex::new(None),
             cmd,
             args,
             wasm_granted_dirs: granted_dirs,
         }
     }
 
-    async fn spawn_child(&self) -> Result<Child> {
+    async fn spawn_process(&self) -> Result<ActiveProcess> {
         info!("Starting MCP Stdio agent: {} {:?}", self.cmd, self.args);
-        let child = Command::new(&self.cmd)
+        let mut child = Command::new(&self.cmd)
             .args(&self.args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -56,7 +62,16 @@ impl StdioMcpClient {
             .stderr(Stdio::null())
             .kill_on_drop(true)   // Kill subprocess when the guard is dropped
             .spawn()?;
-        Ok(child)
+
+        let stdin = child.stdin.take().ok_or_else(|| anyhow!("No stdin handle available for agent"))?;
+        let stdout = child.stdout.take().ok_or_else(|| anyhow!("No stdout handle available for agent"))?;
+        let lines = BufReader::new(stdout).lines();
+
+        Ok(ActiveProcess {
+            child,
+            stdin,
+            lines,
+        })
     }
 
     pub async fn ensure_started(&self) -> Result<()> {
@@ -64,9 +79,9 @@ impl StdioMcpClient {
         if self.cmd.ends_with(".wasm") {
             return Ok(());
         }
-        let mut child_guard = self.child.lock().await;
-        if child_guard.is_none() {
-            *child_guard = Some(self.spawn_child().await?);
+        let mut guard = self.process.lock().await;
+        if guard.is_none() {
+            *guard = Some(self.spawn_process().await?);
         }
         Ok(())
     }
@@ -74,7 +89,7 @@ impl StdioMcpClient {
     /// Send a JSON-RPC request to the agent and receive the matching response.
     ///
     /// For `.wasm` tools: routes through the Wasmtime sandbox (Pillar 4 — V2).
-    /// For native tools: uses the existing stdio subprocess path (unchanged).
+    /// For native tools: uses persistent stdio subprocess with preserved reader buffers.
     pub async fn send_request(&self, request: &crate::mcp_models::McpRequest) -> Result<Value> {
         // ── Wasm Sandbox Path (Pillar 4) ────────────────────────────────────
         if self.cmd.ends_with(".wasm") {
@@ -103,36 +118,36 @@ impl StdioMcpClient {
             return Err(anyhow!("Wasm tool produced no matching JSON-RPC response"));
         }
 
-        // ── Native Subprocess Path (unchanged) ──────────────────────────────
+        // ── Native Subprocess Path with Persistent BufReader ──────────────
         self.ensure_started().await?;
 
-        let mut child_guard = self.child.lock().await;
+        let mut guard = self.process.lock().await;
 
         // If the child exited (crash/restart), respawn it.
-        let child = child_guard.as_mut().ok_or_else(|| anyhow!("Agent process not running"))?;
-        if let Ok(Some(_)) = child.try_wait() {
-            *child_guard = Some(self.spawn_child().await?);
+        if let Some(ref mut proc) = *guard {
+            if let Ok(Some(_)) = proc.child.try_wait() {
+                *guard = None;
+            }
         }
 
-        let child = child_guard.as_mut().ok_or_else(|| anyhow!("Agent process not running"))?;
-        let stdin = child.stdin.as_mut().ok_or_else(|| anyhow!("No stdin handle"))?;
-        let stdout = child.stdout.as_mut().ok_or_else(|| anyhow!("No stdout handle"))?;
+        if guard.is_none() {
+            *guard = Some(self.spawn_process().await?);
+        }
+
+        let proc = guard.as_mut().ok_or_else(|| anyhow!("Agent process not running"))?;
 
         // Serialize and send (newline-delimited JSON)
         let mut req_str = serde_json::to_string(request)?;
         req_str.push('\n');
-        stdin.write_all(req_str.as_bytes()).await?;
-        stdin.flush().await?;
+        proc.stdin.write_all(req_str.as_bytes()).await?;
+        proc.stdin.flush().await?;
 
-        // Read response with per-line size limit and overall timeout
-        let reader = BufReader::new(stdout);
-        let mut lines = reader.lines();
-
+        // Read response with per-line size limit and overall timeout using persistent lines reader
         let result = tokio::time::timeout(
             Duration::from_secs(RESPONSE_TIMEOUT_SECS),
             async {
                 loop {
-                    let line = lines.next_line().await?;
+                    let line = proc.lines.next_line().await?;
                     match line {
                         None => return Err(anyhow!("Agent stdout closed unexpectedly")),
                         Some(l) => {
@@ -157,10 +172,10 @@ impl StdioMcpClient {
         match result {
             Ok(inner) => inner,
             Err(_elapsed) => {
-                if let Some(ref mut child) = *child_guard {
-                    let _ = child.start_kill();
+                if let Some(ref mut proc) = *guard {
+                    let _ = proc.child.start_kill();
                 }
-                *child_guard = None;
+                *guard = None;
                 Err(anyhow!("Agent timed out after {}s", RESPONSE_TIMEOUT_SECS))
             }
         }

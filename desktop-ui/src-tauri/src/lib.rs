@@ -132,21 +132,25 @@ pub fn run() {
                     }
                     "show" => {
                         if let Some(window) = app.get_webview_window("main") {
-                            window.show().unwrap();
-                            window.set_focus().unwrap();
+                            let _ = window.show();
+                            let _ = window.set_focus();
                         }
                     }
                     _ => {}
                 })
                 .build(app)?;
                 
-            let splash_window = app.get_webview_window("splashscreen").unwrap();
-            let main_window = app.get_webview_window("main").unwrap();
+            let splash_opt = app.get_webview_window("splashscreen");
+            let main_opt = app.get_webview_window("main");
             std::thread::spawn(move || {
                 std::thread::sleep(std::time::Duration::from_millis(2500));
-                splash_window.close().unwrap();
-                main_window.show().unwrap();
-                main_window.set_focus().unwrap();
+                if let Some(splash) = splash_opt {
+                    let _ = splash.close();
+                }
+                if let Some(main) = main_opt {
+                    let _ = main.show();
+                    let _ = main.set_focus();
+                }
             });
 
             Ok(())
@@ -154,7 +158,7 @@ pub fn run() {
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 // Hide the window instead of closing the app
-                window.hide().unwrap();
+                let _ = window.hide();
                 api.prevent_close();
             }
         })
