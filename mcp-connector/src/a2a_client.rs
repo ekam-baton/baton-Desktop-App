@@ -106,6 +106,7 @@ pub async fn start_a2a_client(state: Arc<AppState>, connector_id: String) {
 
                 // Use a channel to serialize all outbound writes through a single task.
                 let (out_tx, mut out_rx) = mpsc::channel::<Message>(64);
+                let (err_tx, mut err_rx) = mpsc::channel::<()>(1);
 
                 // Writer task: drains the out_tx channel and sends over the WS sink.
                 let mut write_sink = write_sink;
@@ -113,67 +114,80 @@ pub async fn start_a2a_client(state: Arc<AppState>, connector_id: String) {
                     while let Some(msg) = out_rx.recv().await {
                         if let Err(e) = write_sink.send(msg).await {
                             error!("A2A WebSocket write error: {}", e);
+                            let _ = err_tx.try_send(());
                             break;
                         }
                     }
                 });
 
-                // Reader loop
-                while let Some(msg) = read_stream.next().await {
-                    match msg {
-                        Ok(Message::Text(text)) => {
-                            // Hard size limit before deserialising
-                            if text.len() > MAX_MESSAGE_BYTES {
-                                warn!("Dropping oversized A2A message ({} bytes)", text.len());
-                                continue;
-                            }
-
-                            let envelope = match serde_json::from_str::<A2aEnvelope>(&text) {
-                                Ok(e) => e,
-                                Err(err) => {
-                                    warn!("Malformed A2A envelope: {}", err);
-                                    continue;
-                                }
-                            };
-
-                            // Validate sender_id: allow only hex chars (our client_id format)
-                            if !envelope.sender_id.chars().all(|c| c.is_ascii_hexdigit()) || envelope.sender_id.len() > 64 {
-                                warn!("Dropping A2A envelope with invalid sender_id");
-                                continue;
-                            }
-
-                            let permit = match semaphore.clone().try_acquire_owned() {
-                                Ok(p) => p,
-                                Err(_) => {
-                                    warn!("A2A request queue full — dropping message from {}", envelope.sender_id);
-                                    continue;
-                                }
-                            };
-
-                            let state_clone = state.clone();
-                            let out_tx_clone = out_tx.clone();
-
-                            tokio::spawn(async move {
-                                let _permit = permit; // Released when this task ends.
-                                process_envelope(state_clone, envelope, out_tx_clone).await;
-                            });
-                        }
-                        Ok(Message::Binary(_)) => {
-                            warn!("Received binary A2A message — ignoring (text-only protocol)");
-                        }
-                        Ok(Message::Ping(data)) => {
-                            // Respond to pings to keep the connection alive.
-                            let _ = out_tx.send(Message::Pong(data)).await;
-                        }
-                        Ok(Message::Close(_)) => {
-                            warn!("A2A router requested connection close");
+                // Reader loop with write-error monitoring via tokio::select!
+                loop {
+                    tokio::select! {
+                        _ = err_rx.recv() => {
+                            warn!("A2A WebSocket writer task died — triggering reconnection");
                             break;
                         }
-                        Err(e) => {
-                            error!("A2A WebSocket read error: {}", e);
-                            break;
+                        msg = read_stream.next() => {
+                            match msg {
+                                Some(Ok(Message::Text(text))) => {
+                                    // Hard size limit before deserialising
+                                    if text.len() > MAX_MESSAGE_BYTES {
+                                        warn!("Dropping oversized A2A message ({} bytes)", text.len());
+                                        continue;
+                                    }
+
+                                    let envelope = match serde_json::from_str::<A2aEnvelope>(&text) {
+                                        Ok(e) => e,
+                                        Err(err) => {
+                                            warn!("Malformed A2A envelope: {}", err);
+                                            continue;
+                                        }
+                                    };
+
+                                    // Validate sender_id: allow only hex chars (our client_id format)
+                                    if !envelope.sender_id.chars().all(|c| c.is_ascii_hexdigit()) || envelope.sender_id.len() > 64 {
+                                        warn!("Dropping A2A envelope with invalid sender_id");
+                                        continue;
+                                    }
+
+                                    let permit = match semaphore.clone().try_acquire_owned() {
+                                        Ok(p) => p,
+                                        Err(_) => {
+                                            warn!("A2A request queue full — dropping message from {}", envelope.sender_id);
+                                            continue;
+                                        }
+                                    };
+
+                                    let state_clone = state.clone();
+                                    let out_tx_clone = out_tx.clone();
+
+                                    tokio::spawn(async move {
+                                        let _permit = permit; // Released when this task ends.
+                                        process_envelope(state_clone, envelope, out_tx_clone).await;
+                                    });
+                                }
+                                Some(Ok(Message::Binary(_))) => {
+                                    warn!("Received binary A2A message — ignoring (text-only protocol)");
+                                }
+                                Some(Ok(Message::Ping(data))) => {
+                                    // Respond to pings to keep the connection alive.
+                                    let _ = out_tx.send(Message::Pong(data)).await;
+                                }
+                                Some(Ok(Message::Close(_))) => {
+                                    warn!("A2A router requested connection close");
+                                    break;
+                                }
+                                Some(Err(e)) => {
+                                    error!("A2A WebSocket read error: {}", e);
+                                    break;
+                                }
+                                None => {
+                                    info!("A2A WebSocket stream closed by remote");
+                                    break;
+                                }
+                                _ => {}
+                            }
                         }
-                        _ => {}
                     }
                 }
 

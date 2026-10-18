@@ -110,6 +110,8 @@ impl RatchetState {
         None
     }
 
+    pub const MAX_SKIPPED_KEYS: usize = 2000;
+
     /// Skip message keys if packets arrived out of order.
     fn skip_message_keys(&mut self, until: u32) -> Result<(), &'static str> {
         let dhr_hex = match &self.dhr {
@@ -117,11 +119,14 @@ impl RatchetState {
             None => return Err("No DHR set"),
         };
         
-        if self.nr + 1000 < until {
+        if until.saturating_sub(self.nr) > 1000 {
             return Err("Too many skipped messages");
         }
         
         while self.nr < until {
+            if self.mkskipped.len() >= Self::MAX_SKIPPED_KEYS {
+                return Err("Skipped keys buffer full");
+            }
             let ckr = self.ckr.ok_or("No Receiver Chain Key (ckr) initialized")?;
             let (new_ckr, mk) = Self::kdf_ck(&ckr);
             self.ckr = Some(new_ckr);
@@ -198,7 +203,9 @@ impl RatchetState {
 
         // 2. If the peer's public key changed, perform a DH Ratchet step
         if Some(header_dhr) != self.dhr {
-            self.skip_message_keys(header_pn)?;
+            if self.dhr.is_some() {
+                self.skip_message_keys(header_pn)?;
+            }
             self.dh_ratchet(header_dhr);
         }
 
@@ -226,5 +233,71 @@ impl RatchetState {
         let cipher = Aes256Gcm::new(&aes_gcm::Key::<Aes256Gcm>::from(*mk));
         
         cipher.decrypt(&nonce_gcm, ciphertext).ok()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_double_ratchet_roundtrip() {
+        let shared_secret = [42u8; 32];
+        let bob_secret = StaticSecret::from([7u8; 32]);
+        let bob_pub = PublicKey::from(&bob_secret);
+
+        let mut alice = RatchetState::init_alice(shared_secret, bob_pub);
+        let mut bob = RatchetState::init_bob(shared_secret, [7u8; 32]);
+
+        // Alice sends message 1 to Bob
+        let msg1 = b"Hello from Alice!";
+        let (dhr1, n1, pn1, ct1) = alice.ratchet_encrypt(msg1).unwrap();
+        let pt1 = bob.ratchet_decrypt(dhr1, n1, pn1, &ct1).unwrap();
+        assert_eq!(msg1.to_vec(), pt1);
+
+        // Bob replies to Alice
+        let msg2 = b"Hello from Bob!";
+        let (dhr2, n2, pn2, ct2) = bob.ratchet_encrypt(msg2).unwrap();
+        let pt2 = alice.ratchet_decrypt(dhr2, n2, pn2, &ct2).unwrap();
+        assert_eq!(msg2.to_vec(), pt2);
+    }
+
+    #[test]
+    fn test_double_ratchet_skipped_keys_reordering() {
+        let shared_secret = [99u8; 32];
+        let bob_secret = StaticSecret::from([11u8; 32]);
+        let bob_pub = PublicKey::from(&bob_secret);
+
+        let mut alice = RatchetState::init_alice(shared_secret, bob_pub);
+        let mut bob = RatchetState::init_bob(shared_secret, [11u8; 32]);
+
+        // Alice sends 3 messages
+        let c1 = alice.ratchet_encrypt(b"Message 1").unwrap();
+        let c2 = alice.ratchet_encrypt(b"Message 2").unwrap();
+        let c3 = alice.ratchet_encrypt(b"Message 3").unwrap();
+
+        // Bob receives out-of-order: 3, then 1, then 2
+        let pt3 = bob.ratchet_decrypt(c3.0, c3.1, c3.2, &c3.3).unwrap();
+        assert_eq!(b"Message 3".to_vec(), pt3);
+
+        let pt1 = bob.ratchet_decrypt(c1.0, c1.1, c1.2, &c1.3).unwrap();
+        assert_eq!(b"Message 1".to_vec(), pt1);
+
+        let pt2 = bob.ratchet_decrypt(c2.0, c2.1, c2.2, &c2.3).unwrap();
+        assert_eq!(b"Message 2".to_vec(), pt2);
+    }
+
+    #[test]
+    fn test_skip_message_keys_bound_check() {
+        let shared_secret = [1u8; 32];
+        let bob_secret = StaticSecret::from([2u8; 32]);
+        let bob_pub = PublicKey::from(&bob_secret);
+
+        let mut bob = RatchetState::init_bob(shared_secret, [2u8; 32]);
+        bob.dhr = Some(bob_pub.to_bytes());
+
+        // Skipping > 1000 messages must fail
+        let res = bob.skip_message_keys(1001);
+        assert_eq!(res, Err("Too many skipped messages"));
     }
 }

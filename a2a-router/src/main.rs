@@ -202,6 +202,10 @@ async fn login_handler(
     State(state): State<Arc<AppState>>,
     Json(req): Json<LoginRequest>,
 ) -> impl IntoResponse {
+    if req.client_id.trim().is_empty() || req.client_id.len() > 128 {
+        return (StatusCode::BAD_REQUEST, "Invalid client_id").into_response();
+    }
+
     if req.secret != state.config.jwt_secret {
         return (StatusCode::UNAUTHORIZED, "Invalid secret").into_response();
     }
@@ -245,13 +249,20 @@ async fn metrics_handler() -> impl IntoResponse {
 /// Internal endpoint to receive messages routed from peer nodes.
 async fn internal_forward_handler(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(msg): Json<A2AMessage>,
 ) -> impl IntoResponse {
+    let internal_secret = headers.get("X-Internal-Secret")
+        .and_then(|h| h.to_str().ok());
+    if internal_secret != Some(&state.config.jwt_secret) {
+        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    }
+
     if let Some(tx) = state.local_sessions.get(&msg.receiver_id) {
         if let Ok(payload_str) = serde_json::to_string(&msg) {
             let _ = tx.send(Message::Text(payload_str.into()));
             state.messages_routed.with_label_values(&["delivered_local_from_peer"]).inc();
-            return StatusCode::OK;
+            return StatusCode::OK.into_response();
         }
     }
     // If not connected locally, it means they disconnected between the redis lookup and the HTTP call.
@@ -259,7 +270,7 @@ async fn internal_forward_handler(
     tracing::info!("Peer {} disconnected before forward completion — dropping unroutable message", msg.receiver_id);
     state.messages_routed.with_label_values(&["dropped_offline"]).inc();
     
-    StatusCode::ACCEPTED
+    StatusCode::ACCEPTED.into_response()
 }
 
 async fn ws_handler(
@@ -268,6 +279,10 @@ async fn ws_handler(
     headers: HeaderMap,
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
+    if client_id.trim().is_empty() || client_id.len() > 128 {
+        return (StatusCode::BAD_REQUEST, "Invalid client_id").into_response();
+    }
+
     let token = match extract_bearer(&headers) {
         Some(t) => t,
         None => return (StatusCode::UNAUTHORIZED, "Missing Authorization header").into_response(),
@@ -400,7 +415,11 @@ async fn route_message(msg: A2AMessage, state: &Arc<AppState>) {
     if let Ok(mut conn) = state.redis_pool.get().await {
         if let Ok(Some(remote_url)) = conn.get::<_, Option<String>>(&target_key).await {
             let forward_url = format!("{}/internal/forward", remote_url);
-            match state.http_client.post(&forward_url).json(&msg).send().await {
+            match state.http_client.post(&forward_url)
+                .header("X-Internal-Secret", &state.config.jwt_secret)
+                .json(&msg)
+                .send()
+                .await {
                 Ok(resp) if resp.status().is_success() => {
                     state.messages_routed.with_label_values(&["forwarded_to_peer"]).inc();
                     routed_remote = true;
@@ -464,4 +483,37 @@ fn mint_jwt(client_id: &str, secret: &str) -> Result<String, jsonwebtoken::error
 async fn shutdown_signal() {
     tokio::signal::ctrl_c().await.expect("Failed to install CTRL+C signal handler");
     info!("Shutting down A2A Router...");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_jwt_mint_and_validate_roundtrip() {
+        let secret = "super_secret_test_key_123456789";
+        let client_id = "test_agent_alpha";
+        let token = mint_jwt(client_id, secret).expect("mint failed");
+        let claims = validate_jwt(&token, secret).expect("validate failed");
+        assert_eq!(claims.sub, client_id);
+    }
+
+    #[test]
+    fn test_jwt_validate_wrong_secret_fails() {
+        let secret = "super_secret_test_key_123456789";
+        let wrong_secret = "invalid_secret_key_987654321";
+        let token = mint_jwt("agent_beta", secret).expect("mint failed");
+        let res = validate_jwt(&token, wrong_secret);
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_client_id_bounds() {
+        let empty_id = "   ";
+        assert!(empty_id.trim().is_empty());
+        let valid_id = "agent_valid_123";
+        assert!(!valid_id.trim().is_empty() && valid_id.len() <= 128);
+        let oversized_id = "a".repeat(129);
+        assert!(oversized_id.len() > 128);
+    }
 }
