@@ -53,8 +53,20 @@ fn run_wasm_tool_blocking(
     engine_cfg.consume_fuel(true);
     let engine = Engine::new(&engine_cfg)?;
 
+    let metadata = std::fs::metadata(wasm_path)
+        .map_err(|e| anyhow!("Could not inspect wasm file '{}': {}", wasm_path, e))?;
+    if metadata.len() > 50 * 1024 * 1024 {
+        return Err(anyhow!("Wasm binary exceeds 50MB limit"));
+    }
+    if metadata.len() < 8 {
+        return Err(anyhow!("File too small to be a valid WebAssembly module"));
+    }
+
     let wasm_bytes = std::fs::read(wasm_path)
         .map_err(|e| anyhow!("Could not read wasm file '{}': {}", wasm_path, e))?;
+    if !wasm_bytes.starts_with(b"\0asm") {
+        return Err(anyhow!("File '{}' is not a valid WebAssembly binary (missing \\0asm magic bytes)", wasm_path));
+    }
     let module = Module::new(&engine, &wasm_bytes)?;
 
     let mut wasi_builder = WasiCtxBuilder::new();

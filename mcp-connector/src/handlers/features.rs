@@ -133,16 +133,29 @@ pub async fn create_schedule(
     Json(payload): Json<CreateTaskReq>,
 ) -> Result<StatusCode, StatusCode> {
     check_auth(&headers, &state.config.admin_password)?;
+
+    let task_name = payload.task_name.trim();
+    let cron_expression = payload.cron_expression.trim();
+
+    if task_name.is_empty() || task_name.len() > 128 || cron_expression.is_empty() || cron_expression.len() > 100 {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let parts: Vec<&str> = cron_expression.split_whitespace().collect();
+    if parts.len() != 5 {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
     sqlx::query("INSERT INTO scheduled_tasks (task_name, cron_expression) VALUES ($1, $2)")
-        .bind(&payload.task_name)
-        .bind(&payload.cron_expression)
+        .bind(task_name)
+        .bind(cron_expression)
         .execute(&state.db)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         
     sqlx::query("INSERT INTO audit_logs (event_type, detail, severity) VALUES ($1, $2, 'info')")
         .bind("TASK_SCHEDULED")
-        .bind(format!("Scheduled task: {}", payload.task_name))
+        .bind(format!("Scheduled task: {}", task_name))
         .execute(&state.db)
         .await
         .ok();
