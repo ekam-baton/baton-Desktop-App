@@ -271,9 +271,11 @@ pub async fn run_server() -> anyhow::Result<()> {
 
     // ── Router ────────────────────────────────────────────────────────────────
 
-    // Tight-rate-limited pairing sub-router.
+    // Tight-rate-limited pairing and token refresh sub-router.
     let pair_router = Router::new()
         .route("/pair", post(handlers::pair::pair_handler))
+        .route("/pair/refresh", post(handlers::pair::refresh_handler))
+        .route("/auth/refresh", post(handlers::pair::refresh_handler))
         .layer(middleware::from_fn_with_state(
             pair_limiter.clone(),
             rate_limit_middleware,

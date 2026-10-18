@@ -432,3 +432,50 @@ pub async fn validate_client_authorization(
     Ok(claims)
 }
 
+#[derive(Debug, Deserialize)]
+pub struct RefreshRequest {
+    pub refresh_token: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RefreshResponse {
+    pub access_token: String,
+    pub refresh_token: String,
+    pub expires_in: u64,
+}
+
+pub async fn refresh_device_token(
+    refresh_token: &str,
+    state: &Arc<AppState>,
+) -> Result<RefreshResponse, AuthError> {
+    let claims = validate_refresh_token(refresh_token, &state.config.jwt_refresh_secret)?;
+
+    // Ensure the device is still active and registered
+    if !state.paired_devices.contains_key(&claims.sub) {
+        let exists = sqlx::query("SELECT 1 FROM paired_devices WHERE client_id = $1")
+            .bind(&claims.sub)
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten()
+            .is_some();
+        if !exists {
+            return Err(AuthError::Revoked);
+        }
+    }
+
+    let (access_token, new_refresh_token) = generate_token_pair(
+        &claims.sub,
+        &state.config.jwt_secret,
+        &state.config.jwt_refresh_secret,
+        state.config.jwt_expiry_hours,
+    ).map_err(|e| AuthError::Invalid(e.to_string()))?;
+
+    Ok(RefreshResponse {
+        access_token,
+        refresh_token: new_refresh_token,
+        expires_in: state.config.jwt_expiry_hours * 3600,
+    })
+}
+
+

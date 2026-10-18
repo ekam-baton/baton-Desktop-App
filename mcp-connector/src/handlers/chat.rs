@@ -200,5 +200,7 @@ pub async fn chat_handler(
         }
     };
 
-    Sse::new(stream).into_response()
+    Sse::new(stream)
+        .keep_alive(axum::response::sse::KeepAlive::default())
+        .into_response()
 }
