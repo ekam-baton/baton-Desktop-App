@@ -242,23 +242,51 @@ pub async fn handoff_upload(
     // Create the directory if it doesn't exist
     let _ = tokio::fs::create_dir_all(&inbox_dir).await;
 
+    const ALLOWED_EXTENSIONS: &[&str] = &[
+        "pdf", "txt", "md", "csv", "json", "xml",
+        "jpg", "jpeg", "png", "gif", "webp", "svg",
+        "mp3", "wav", "mp4", "webm", "zip",
+    ];
+
     while let Some(field) = multipart.next_field().await.unwrap_or(None) {
         let _name = field.name().unwrap_or("").to_string();
         let raw_name = field.file_name().unwrap_or("unknown").to_string();
-        let safe_name = std::path::Path::new(&raw_name).file_name().and_then(|n| n.to_str()).unwrap_or("unknown_file").to_string();
+        let ext = std::path::Path::new(&raw_name)
+            .extension()
+            .and_then(|s| s.to_str())
+            .map(|e| e.to_lowercase())
+            .unwrap_or_default();
+
+        if ext.is_empty() || !ALLOWED_EXTENSIONS.contains(&ext.as_str()) {
+            tracing::warn!("Handoff upload rejected: disallowed or missing extension '.{}'", ext);
+            continue;
+        }
+
+        let display_name = std::path::Path::new(&raw_name)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("file")
+            .chars()
+            .take(128)
+            .collect::<String>();
+
+        let unique_filename = format!("{}.{}", uuid::Uuid::new_v4(), ext);
         let data = field.bytes().await.unwrap_or_default();
-        
-        if !data.is_empty() {
-            let file_path = inbox_dir.join(&safe_name);
-            if let Err(e) = tokio::fs::write(&file_path, &data).await {
-                tracing::error!("Failed to write inbox file to disk: {}", e);
-            }
+        if data.is_empty() || (data.len() as u64) > state.config.max_upload_bytes {
+            tracing::warn!("Handoff upload rejected: empty or exceeds size limit");
+            continue;
+        }
+
+        let file_path = inbox_dir.join(&unique_filename);
+        if let Err(e) = tokio::fs::write(&file_path, &data).await {
+            tracing::error!("Failed to write inbox file to disk: {}", e);
+            continue;
         }
         
         file_count += 1;
         
         sqlx::query("INSERT INTO inbox_files (file_name, sender) VALUES ($1, 'Desktop Handoff')")
-            .bind(&safe_name)
+            .bind(&display_name)
             .execute(&state.db)
             .await
             .ok();

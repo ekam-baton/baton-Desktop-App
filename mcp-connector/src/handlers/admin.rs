@@ -480,7 +480,14 @@ pub async fn upload_vault_handler(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<VaultRequest>,
 ) -> Result<StatusCode, StatusCode> {
-    check_auth(&headers, &state.config.admin_password)?;
+    // Authenticate via either Admin Basic auth or Paired Device Bearer token matching client_id
+    let is_admin = check_auth(&headers, &state.config.admin_password).is_ok();
+    if !is_admin {
+        match crate::auth::validate_client_authorization(&headers, &state, None).await {
+            Ok(claims) if claims.sub == payload.client_id => {},
+            _ => return Err(StatusCode::UNAUTHORIZED),
+        }
+    }
 
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -508,7 +515,14 @@ pub async fn download_vault_handler(
     Path(client_id): Path<String>,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<VaultResponse>, StatusCode> {
-    check_auth(&headers, &state.config.admin_password)?;
+    // Authenticate via either Admin Basic auth or Paired Device Bearer token matching client_id
+    let is_admin = check_auth(&headers, &state.config.admin_password).is_ok();
+    if !is_admin {
+        match crate::auth::validate_client_authorization(&headers, &state, None).await {
+            Ok(claims) if claims.sub == client_id => {},
+            _ => return Err(StatusCode::UNAUTHORIZED),
+        }
+    }
 
     use sqlx::Row;
     let row = sqlx::query("SELECT vault_data, updated_at FROM vaults WHERE client_id = $1")
