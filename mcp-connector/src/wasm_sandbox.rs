@@ -105,7 +105,7 @@ fn run_wasm_tool_blocking(
         },
     );
     store.limiter(|state| &mut state.limits);
-    store.set_fuel(10_000_000_000).unwrap(); // Give it ~10B instructions of fuel before trapping
+    store.set_fuel(10_000_000_000).map_err(|e| anyhow!("Failed to set wasm fuel: {}", e))?; // Give it ~10B instructions of fuel before trapping
 
     let mut linker: Linker<SandboxState> = Linker::new(&engine);
     wasmtime_wasi::add_to_linker(&mut linker, |s| &mut s.wasi)?;

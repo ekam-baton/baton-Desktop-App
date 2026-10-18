@@ -44,6 +44,10 @@ pub async fn execute_handler(
         Err(e) => return e.into_response(),
     };
 
+    if payload.target_environment.trim().is_empty() || payload.target_environment.len() > 100 {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error": "Invalid target_environment"}))).into_response();
+    }
+
     if payload.tool_name.is_empty() || payload.tool_name.len() > 100 {
         return (StatusCode::BAD_REQUEST, Json(json!({"error": "Invalid tool_name"}))).into_response();
     }
@@ -111,6 +115,10 @@ pub async fn chat_handler(
     Json(payload): Json<ChatRequest>,
 ) -> impl IntoResponse {
     let provider_name = payload.provider.unwrap_or_else(|| state.config.default_provider.clone());
+
+    if payload.messages.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error": "messages must not be empty"}))).into_response();
+    }
 
     if let Err(e) = validate_client_authorization(&headers, &state, Some(&provider_name)).await {
         return e.into_response();
