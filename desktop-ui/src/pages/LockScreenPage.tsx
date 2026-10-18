@@ -89,11 +89,16 @@ export const LockScreenPage = () => {
           </button>
           <button 
             className="keypad-btn keypad-btn-del"
-            onClick={() => setPin(pin.slice(0, -1))}
+            onClick={() => removeDigit()}
           >
             Del
           </button>
         </div>
+        {!localStorage.getItem('baton_app_pin') && (
+          <p style={{ marginTop: '1.5rem', fontSize: '0.8rem', color: 'var(--text-muted, #888)', textAlign: 'center' }}>
+            Default PIN: 0000 (Configure in Settings)
+          </p>
+        )}
       </div>
     </div>
   );

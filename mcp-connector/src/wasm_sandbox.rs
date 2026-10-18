@@ -106,7 +106,10 @@ fn run_wasm_tool_blocking(
     start_fn.call(&mut store, ())?;
 
     drop(store);
-    let stdout_buf = stdout_pipe.try_into_inner().expect("WASI engine execution failed").into_inner();
+    let stdout_buf = stdout_pipe
+        .try_into_inner()
+        .map_err(|_| anyhow!("Failed to extract stdout buffer from WASI pipe"))?
+        .into_inner();
 
     let output = String::from_utf8(stdout_buf)
         .map_err(|e| anyhow!("Wasm stdout contained invalid UTF-8: {}", e))?;
