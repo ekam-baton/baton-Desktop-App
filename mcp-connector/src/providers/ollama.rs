@@ -5,7 +5,7 @@ use reqwest::Client;
 use serde_json::{json, Value};
 use tokio::sync::mpsc::Sender;
 
-use super::{ChatMessage, ChatOptions, Provider, ProviderError};
+use super::{ChatMessage, ChatOptions, LineStreamBuffer, Provider, ProviderError};
 use crate::config::Config;
 
 pub struct OllamaProvider {
@@ -81,11 +81,13 @@ impl Provider for OllamaProvider {
 
         // Ollama streams newline-delimited JSON (not SSE)
         let mut stream = resp.bytes_stream();
+        let mut line_buffer = LineStreamBuffer::new();
         while let Some(chunk) = stream.next().await {
             let bytes = chunk.map_err(|e| ProviderError::Http(e.to_string()))?;
-            for line in String::from_utf8_lossy(&bytes).lines() {
+            line_buffer.push_chunk(&bytes);
+            while let Some(line) = line_buffer.next_line() {
                 if line.is_empty() { continue; }
-                if let Ok(json) = serde_json::from_str::<Value>(line) {
+                if let Ok(json) = serde_json::from_str::<Value>(&line) {
                     if let Some(content) = json["message"]["content"].as_str() {
                         if !content.is_empty() {
                             let _ = tx.send(Ok(content.to_owned())).await;

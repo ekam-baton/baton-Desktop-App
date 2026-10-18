@@ -5,7 +5,7 @@ use reqwest::Client;
 use serde_json::{json, Value};
 use tokio::sync::mpsc::Sender;
 
-use super::{ChatMessage, ChatOptions, Provider, ProviderError};
+use super::{ChatMessage, ChatOptions, LineStreamBuffer, Provider, ProviderError};
 use crate::config::Config;
 
 pub struct OpenAiProvider {
@@ -85,9 +85,11 @@ impl Provider for OpenAiProvider {
         }
 
         let mut stream = resp.bytes_stream();
+        let mut line_buffer = LineStreamBuffer::new();
         while let Some(chunk) = stream.next().await {
             let bytes = chunk.map_err(|e| ProviderError::Http(e.to_string()))?;
-            for line in String::from_utf8_lossy(&bytes).lines() {
+            line_buffer.push_chunk(&bytes);
+            while let Some(line) = line_buffer.next_line() {
                 if let Some(data) = line.strip_prefix("data: ") {
                     if data.trim() == "[DONE]" { return Ok(()); }
                     if let Ok(json) = serde_json::from_str::<Value>(data) {

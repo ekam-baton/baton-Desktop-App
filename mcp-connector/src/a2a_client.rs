@@ -144,9 +144,15 @@ pub async fn start_a2a_client(state: Arc<AppState>, connector_id: String) {
                                         }
                                     };
 
-                                    // Validate sender_id: allow only hex chars (our client_id format)
-                                    if !envelope.sender_id.chars().all(|c| c.is_ascii_hexdigit()) || envelope.sender_id.len() > 64 {
-                                        warn!("Dropping A2A envelope with invalid sender_id");
+                                    // Validate sender_id: non-empty, hex chars only, max 64
+                                    if envelope.sender_id.is_empty() || !envelope.sender_id.chars().all(|c| c.is_ascii_hexdigit()) || envelope.sender_id.len() > 64 {
+                                        warn!("Dropping A2A envelope with invalid or empty sender_id");
+                                        continue;
+                                    }
+
+                                    // Validate receiver_id: non-empty, max 128
+                                    if envelope.receiver_id.trim().is_empty() || envelope.receiver_id.len() > 128 {
+                                        warn!("Dropping A2A envelope with invalid or empty receiver_id");
                                         continue;
                                     }
 
@@ -519,6 +525,14 @@ mod tests {
         };
         assert_eq!(response.depth, 3);
         assert!(response.depth >= MAX_A2A_RECURSION_DEPTH);
+    }
+
+    #[test]
+    fn test_a2a_envelope_empty_sender_id_rejected() {
+        let is_valid_sender = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_hexdigit()) && s.len() <= 64;
+        assert!(!is_valid_sender(""), "Empty sender_id must be rejected");
+        assert!(!is_valid_sender("not-hex!"), "Non-hex sender_id must be rejected");
+        assert!(is_valid_sender("0123456789abcdef"), "Valid hex sender_id must be accepted");
     }
 }
 

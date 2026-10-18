@@ -95,3 +95,51 @@ pub fn get_provider(
         other => Err(ProviderError::NotConfigured(other.to_owned())),
     }
 }
+
+/// Helper to extract complete newline-delimited lines from an incoming stream of byte chunks,
+/// preserving partial lines across chunk boundaries without loss or corruption.
+#[derive(Default)]
+pub struct LineStreamBuffer {
+    buffer: Vec<u8>,
+}
+
+impl LineStreamBuffer {
+    pub fn new() -> Self {
+        Self { buffer: Vec::new() }
+    }
+
+    pub fn push_chunk(&mut self, bytes: &[u8]) {
+        self.buffer.extend_from_slice(bytes);
+    }
+
+    pub fn next_line(&mut self) -> Option<String> {
+        if let Some(pos) = self.buffer.iter().position(|&b| b == b'\n') {
+            let line_bytes: Vec<u8> = self.buffer.drain(..=pos).collect();
+            let line = String::from_utf8_lossy(&line_bytes).trim().to_string();
+            Some(line)
+        } else {
+            None
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_line_stream_buffer_chunk_split_and_multibyte() {
+        let mut buf = LineStreamBuffer::new();
+        // Chunk 1: Partial line ending mid-word with partial json
+        buf.push_chunk(b"data: {\"text\": \"Hello ");
+        assert_eq!(buf.next_line(), None);
+
+        // Chunk 2: Rest of line with emoji and newline
+        let emoji_part = "World 🌍\"}\n".as_bytes();
+        buf.push_chunk(emoji_part);
+
+        let line = buf.next_line().expect("Should extract complete line");
+        assert_eq!(line, "data: {\"text\": \"Hello World 🌍\"}");
+        assert_eq!(buf.next_line(), None);
+    }
+}
