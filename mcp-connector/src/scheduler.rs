@@ -7,8 +7,12 @@ use crate::state::AppState;
 pub async fn start_scheduler(state: Arc<AppState>) {
     info!("Starting background cron scheduler...");
     
-    // Poll every 60 seconds
-    let mut interval = time::interval(Duration::from_secs(60));
+    // Poll every 60 seconds, starting after the first 60s delay
+    let mut interval = time::interval_at(
+        tokio::time::Instant::now() + Duration::from_secs(60),
+        Duration::from_secs(60),
+    );
+    interval.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
     
     loop {
         interval.tick().await;

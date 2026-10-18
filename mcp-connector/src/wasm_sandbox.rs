@@ -73,10 +73,10 @@ fn run_wasm_tool_blocking(
     }
     for dir_path in granted_dirs {
         let dir_path_str = dir_path.to_string_lossy().to_string();
-        let dir = std::fs::File::open(&dir_path)
+        let dir = Dir::open_ambient_dir(dir_path, wasmtime_wasi::sync::ambient_authority())
             .map_err(|e| anyhow!("Cannot open granted dir '{}': {}", dir_path_str, e))?;
         wasi_builder.preopened_dir(
-            Dir::from_std_file(dir),
+            dir,
             &dir_path_str,
         )?;
     }
