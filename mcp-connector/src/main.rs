@@ -143,6 +143,23 @@ pub async fn run_server() -> anyhow::Result<()> {
     // ── State ─────────────────────────────────────────────────────────────────
     let state = Arc::new(AppState::new(config.clone(), pool));
 
+    // Preload persisted paired devices into memory cache across restarts
+    if let Ok(paired_rows) = sqlx::query("SELECT client_id, public_key FROM paired_devices")
+        .fetch_all(&state.db)
+        .await
+    {
+        for row in paired_rows {
+            use sqlx::Row;
+            if let (Ok(client_id), Ok(public_key)) = (
+                row.try_get::<String, _>("client_id"),
+                row.try_get::<String, _>("public_key"),
+            ) {
+                state.paired_devices.insert(client_id, public_key);
+            }
+        }
+        tracing::info!("Preloaded {} paired device(s) into memory cache", state.paired_devices.len());
+    }
+
     // ── Connector Identity ────────────────────────────────────────────────────
     let connector_id = get_or_create_connector_id();
     let data_dir = config::get_app_data_dir();

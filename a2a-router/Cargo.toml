@@ -28,3 +28,4 @@ redis = { workspace = true }
 deadpool-redis = { workspace = true }
 sqlx = { workspace = true }
 reqwest = { workspace = true }
+subtle = "2.6"

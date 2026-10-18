@@ -369,7 +369,21 @@ pub async fn validate_client_authorization(
         }
         None => {
             // Also check paired_devices cache
-            let paired = state.paired_devices.contains_key(&claims.sub);
+            let mut paired = state.paired_devices.contains_key(&claims.sub);
+            if !paired {
+                // Fallback: check database directly and cache if found
+                if let Ok(Some(row)) = sqlx::query("SELECT public_key FROM paired_devices WHERE client_id = $1")
+                    .bind(&claims.sub)
+                    .fetch_optional(&state.db)
+                    .await
+                {
+                    use sqlx::Row;
+                    if let Ok(pk) = row.try_get::<String, _>("public_key") {
+                        state.paired_devices.insert(claims.sub.clone(), pk);
+                        paired = true;
+                    }
+                }
+            }
             if paired {
                 ("approved".to_string(), "guest".to_string())
             } else {

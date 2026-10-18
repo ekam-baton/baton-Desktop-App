@@ -29,6 +29,7 @@ use deadpool_redis::{Config as RedisConfig, Runtime};
 use redis::AsyncCommands;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
+use subtle::ConstantTimeEq;
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
@@ -206,7 +207,12 @@ async fn login_handler(
         return (StatusCode::BAD_REQUEST, "Invalid client_id").into_response();
     }
 
-    if req.secret != state.config.jwt_secret {
+    let secret_matches = if req.secret.len() == state.config.jwt_secret.len() {
+        bool::from(req.secret.as_bytes().ct_eq(state.config.jwt_secret.as_bytes()))
+    } else {
+        false
+    };
+    if !secret_matches {
         return (StatusCode::UNAUTHORIZED, "Invalid secret").into_response();
     }
     
@@ -254,7 +260,13 @@ async fn internal_forward_handler(
 ) -> impl IntoResponse {
     let internal_secret = headers.get("X-Internal-Secret")
         .and_then(|h| h.to_str().ok());
-    if internal_secret != Some(&state.config.jwt_secret) {
+    let secret_matches = match internal_secret {
+        Some(s) if s.len() == state.config.jwt_secret.len() => {
+            bool::from(s.as_bytes().ct_eq(state.config.jwt_secret.as_bytes()))
+        }
+        _ => false,
+    };
+    if !secret_matches {
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
     }
 
