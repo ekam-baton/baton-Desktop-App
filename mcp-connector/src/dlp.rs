@@ -95,8 +95,17 @@ impl DlpEngine {
             if let Some(m) = pattern.regex.find(text) {
                 // Build a redacted sample: show the pattern label and a
                 // partial context window — never the actual secret value.
-                let start = m.start().saturating_sub(10);
-                let end = (m.end() + 10).min(text.len());
+                // Guard against multi-byte UTF-8 char boundary slicing panics.
+                let mut start = m.start().saturating_sub(10);
+                while start > 0 && !text.is_char_boundary(start) {
+                    start -= 1;
+                }
+
+                let mut end = (m.end() + 10).min(text.len());
+                while end < text.len() && !text.is_char_boundary(end) {
+                    end += 1;
+                }
+
                 let context = &text[start..end];
                 // Replace the matched value with [REDACTED] for the log.
                 let redacted_sample = pattern.regex.replace(context, "[REDACTED]").to_string();
@@ -157,5 +166,16 @@ mod tests {
         let prompt = "Token: ghp_aBcDeFgHiJkLmNoPqRsTuVwXyZ1234567890";
         let violations = engine.scan(prompt);
         assert!(!violations.is_empty(), "Should detect GitHub classic token");
+    }
+
+    #[test]
+    fn test_dlp_multibyte_utf8_boundary_no_panic() {
+        let engine = DlpEngine::new();
+        // Multi-byte characters and emojis adjacent to AWS key
+        let prompt = "🔥🚀🌟🔑AKIAIOSFODNN7EXAMPLE✨🎉💡";
+        let violations = engine.scan(prompt);
+        assert!(!violations.is_empty(), "Should detect AWS key without UTF-8 slice panic");
+        assert_eq!(violations[0].label, "AWS Access Key");
+        assert!(violations[0].redacted_sample.contains("[REDACTED]"));
     }
 }
