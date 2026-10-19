@@ -19,6 +19,10 @@ pub struct AppState {
     // Also persisted in SQLite; this is an in-memory cache for speed.
     pub paired_devices: Arc<DashMap<String, String>>,
 
+    // Per-sender serialization locks for A2A incoming envelope processing
+    // Prevents concurrent race conditions on Double Ratchet state in SQLite.
+    pub a2a_sender_locks: Arc<DashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+
     // Metrics
     pub requests_total: CounterVec,
     pub streaming_duration: HistogramVec,
@@ -84,6 +88,7 @@ impl AppState {
                 .build()
                 .expect("Failed to initialize internal reqwest HTTP client"),
             paired_devices: Arc::new(DashMap::new()),
+            a2a_sender_locks: Arc::new(DashMap::new()),
             requests_total,
             streaming_duration,
             active_connections,

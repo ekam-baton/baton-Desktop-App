@@ -232,6 +232,19 @@ async fn process_envelope(
         info!("Processing group message for group {}", gid);
     }
 
+    // ── Per-Sender Lock ──────────────────────────────────────────────────────
+    // Acquire per-sender lock to serialize Double Ratchet cryptographic state progression.
+    // This prevents concurrent requests from the same peer from interleaving their ratchet transitions
+    // and causing permanent cryptographic desynchronization.
+    let sender_lock = {
+        state.a2a_sender_locks
+            .entry(envelope.sender_id.clone())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .value()
+            .clone()
+    };
+    let _sender_guard = sender_lock.lock().await;
+
     // ── 1. ACL check ─────────────────────────────────────────────────────────
     let auth_record = sqlx::query(
         "SELECT a.status, p.x25519_public_key, p.ratchet_state 
@@ -539,6 +552,46 @@ mod tests {
         assert!(!is_valid_sender(""), "Empty sender_id must be rejected");
         assert!(!is_valid_sender("not-hex!"), "Non-hex sender_id must be rejected");
         assert!(is_valid_sender("0123456789abcdef"), "Valid hex sender_id must be accepted");
+    }
+
+    #[tokio::test]
+    async fn test_a2a_sender_locks_isolation() {
+        use dashmap::DashMap;
+        let locks: DashMap<String, Arc<tokio::sync::Mutex<()>>> = DashMap::new();
+
+        let lock_a = locks
+            .entry("sender_a".to_string())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .value()
+            .clone();
+
+        let lock_b = locks
+            .entry("sender_b".to_string())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .value()
+            .clone();
+
+        // Distinct senders have distinct locks
+        assert!(!Arc::ptr_eq(&lock_a, &lock_b));
+
+        // Re-querying sender_a returns the SAME mutex
+        let lock_a2 = locks
+            .entry("sender_a".to_string())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .value()
+            .clone();
+        assert!(Arc::ptr_eq(&lock_a, &lock_a2));
+
+        // Acquiring lock_a does not block acquiring lock_b
+        let guard_a = lock_a.try_lock();
+        assert!(guard_a.is_ok());
+
+        let guard_b = lock_b.try_lock();
+        assert!(guard_b.is_ok());
+
+        // A second caller for sender_a CANNOT acquire the lock concurrently
+        let guard_a_contended = lock_a2.try_lock();
+        assert!(guard_a_contended.is_err(), "Same sender must be strictly serialized");
     }
 }
 

@@ -28,13 +28,21 @@ pub async fn run_wasm_tool(
     let granted_dirs = granted_dirs.to_vec();
     let input_json = input_json.to_owned();
 
-    let result = tokio::task::spawn_blocking(move || {
-        run_wasm_tool_blocking(&wasm_path, &granted_dirs, memory_mb, &input_json)
-    });
+    // Spawn execution on an isolated, dedicated OS worker thread rather than Tokio's shared blocking threadpool.
+    // This strictly protects Tokio's blocking pool (which is shared with SQLite transactions,
+    // disk writes, and file streaming) from being starved by long-running or looping Wasm tools.
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    std::thread::Builder::new()
+        .name("wasm-sandbox".to_string())
+        .spawn(move || {
+            let res = run_wasm_tool_blocking(&wasm_path, &granted_dirs, memory_mb, &input_json);
+            let _ = tx.send(res);
+        })
+        .map_err(|e| anyhow!("Failed to spawn wasm sandbox worker thread: {}", e))?;
 
-    match tokio::time::timeout(std::time::Duration::from_secs(WASM_TIMEOUT_SECS), result).await {
+    match tokio::time::timeout(std::time::Duration::from_secs(WASM_TIMEOUT_SECS), rx).await {
         Ok(Ok(inner)) => inner,
-        Ok(Err(join_err)) => Err(anyhow!("Wasm sandbox thread panicked: {}", join_err)),
+        Ok(Err(_)) => Err(anyhow!("Wasm sandbox worker thread terminated without sending output")),
         Err(_) => Err(anyhow!("Wasm tool timed out after {}s", WASM_TIMEOUT_SECS)),
     }
 }
@@ -105,7 +113,9 @@ fn run_wasm_tool_blocking(
         },
     );
     store.limiter(|state| &mut state.limits);
-    store.set_fuel(10_000_000_000).map_err(|e| anyhow!("Failed to set wasm fuel: {}", e))?; // Give it ~10B instructions of fuel before trapping
+    // Enforce an instruction fuel cap (250 million instructions, ~100-200ms CPU runtime)
+    // preventing infinite loops from running away with CPU cycles.
+    store.set_fuel(250_000_000).map_err(|e| anyhow!("Failed to set wasm fuel: {}", e))?;
 
     let mut linker: Linker<SandboxState> = Linker::new(&engine);
     wasmtime_wasi::add_to_linker(&mut linker, |s| &mut s.wasi)?;
@@ -128,4 +138,32 @@ fn run_wasm_tool_blocking(
 
     info!("🧱 Wasm Sandbox: '{}' completed ({} bytes)", wasm_path, output.len());
     Ok(output)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_wasm_engine_fuel_and_limits_config() {
+        let mut engine_cfg = wasmtime::Config::new();
+        engine_cfg.cranelift_opt_level(wasmtime::OptLevel::Speed);
+        engine_cfg.max_wasm_stack(1 * 1024 * 1024);
+        engine_cfg.consume_fuel(true);
+        let engine = Engine::new(&engine_cfg);
+        assert!(engine.is_ok(), "Engine with fuel configuration must initialize cleanly");
+
+        let engine = engine.unwrap();
+        let mut store = Store::new(&engine, ());
+        assert!(store.set_fuel(250_000_000).is_ok(), "Fuel cap must be set successfully");
+        assert_eq!(store.get_fuel().unwrap(), 250_000_000);
+    }
+
+    #[tokio::test]
+    async fn test_wasm_sandbox_isolated_thread_execution() {
+        // Verifies that a non-existent wasm path returns an immediate error without panicking
+        // while running across the isolated thread channel
+        let result = run_wasm_tool("non_existent_tool.wasm", &[], 16, "{}").await;
+        assert!(result.is_err());
+    }
 }
