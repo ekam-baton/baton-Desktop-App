@@ -122,12 +122,16 @@ pub async fn pair_device(
     // Never truncate — truncation creates collision attack surface.
     let client_id = hex::encode(&pk_bytes);
 
-    // Cap device_name to prevent oversized DB writes and XSS amplification.
+    // Cap device_name to prevent oversized DB writes and XSS/CRLF log injection.
     let raw_name = req.device_name.unwrap_or_else(|| "Baton Device".into());
-    let device_name: String = raw_name.chars().take(128).collect();
+    let device_name: String = raw_name.chars().filter(|c| !c.is_control()).take(128).collect();
+    let device_name = if device_name.trim().is_empty() { "Baton Device".to_string() } else { device_name };
     let enc_device_name = encrypt_db_field(&device_name, &state.config.jwt_secret).unwrap_or(device_name.clone());
 
-    let x25519_pub = req.x25519_public_key.unwrap_or_else(|| "".to_string());
+    let x25519_pub = req.x25519_public_key.unwrap_or_default();
+    if !x25519_pub.is_empty() && (x25519_pub.len() != 64 || !x25519_pub.chars().all(|c| c.is_ascii_hexdigit())) {
+        return Err(anyhow!("Invalid x25519 public key format: must be 64 hex characters"));
+    }
     let enc_x25519_pub = encrypt_db_field(&x25519_pub, &state.config.jwt_secret).unwrap_or(x25519_pub);
 
     // Persist to DB

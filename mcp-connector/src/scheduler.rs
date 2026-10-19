@@ -53,6 +53,50 @@ pub fn is_cron_due(expr: &str, now: &chrono::DateTime<chrono::Local>) -> bool {
         && matches_cron_field(parts[4], dow, 0, 6)
 }
 
+pub fn is_valid_cron_field(field: &str, min_val: u32, max_val: u32) -> bool {
+    let field = field.trim();
+    if field == "*" {
+        return true;
+    }
+    if let Some(step_str) = field.strip_prefix("*/") {
+        if let Ok(step) = step_str.parse::<u32>() {
+            return step > 0 && step <= max_val;
+        }
+        return false;
+    }
+    for part in field.split(',') {
+        let part = part.trim();
+        if let Some((start_s, end_s)) = part.split_once('-') {
+            if let (Ok(start), Ok(end)) = (start_s.parse::<u32>(), end_s.parse::<u32>()) {
+                if start < min_val || end > max_val || start > end {
+                    return false;
+                }
+            } else {
+                return false;
+            }
+        } else if let Ok(val) = part.parse::<u32>() {
+            if val < min_val || val > max_val {
+                return false;
+            }
+        } else {
+            return false;
+        }
+    }
+    true
+}
+
+pub fn is_valid_cron_expression(expr: &str) -> bool {
+    let parts: Vec<&str> = expr.split_whitespace().collect();
+    if parts.len() != 5 {
+        return false;
+    }
+    is_valid_cron_field(parts[0], 0, 59)
+        && is_valid_cron_field(parts[1], 0, 23)
+        && is_valid_cron_field(parts[2], 1, 31)
+        && is_valid_cron_field(parts[3], 1, 12)
+        && is_valid_cron_field(parts[4], 0, 6)
+}
+
 pub async fn start_scheduler(state: Arc<AppState>) {
     info!("Starting background cron scheduler...");
     
@@ -139,6 +183,22 @@ mod tests {
         // Wrong number of fields fails
         assert!(!is_cron_due("* * * *", &now));
         assert!(!is_cron_due("* * * * * *", &now));
+    }
+
+    #[test]
+    fn test_is_valid_cron_expression() {
+        assert!(is_valid_cron_expression("* * * * *"));
+        assert!(is_valid_cron_expression("*/5 * * * *"));
+        assert!(is_valid_cron_expression("0 12 * * 1-5"));
+        assert!(is_valid_cron_expression("15,30 8-17 1 1-12 0"));
+
+        // Invalid fields
+        assert!(!is_valid_cron_expression("60 * * * *")); // minute > 59
+        assert!(!is_valid_cron_expression("* 24 * * *")); // hour > 23
+        assert!(!is_valid_cron_expression("* * 32 * *")); // dom > 31
+        assert!(!is_valid_cron_expression("* * * 13 *")); // month > 12
+        assert!(!is_valid_cron_expression("* * * * 7"));  // dow > 6
+        assert!(!is_valid_cron_expression("not a valid cron expr"));
     }
 }
 

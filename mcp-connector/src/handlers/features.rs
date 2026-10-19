@@ -145,8 +145,7 @@ pub async fn create_schedule(
         return Err(StatusCode::BAD_REQUEST);
     }
 
-    let parts: Vec<&str> = cron_expression.split_whitespace().collect();
-    if parts.len() != 5 {
+    if !crate::scheduler::is_valid_cron_expression(cron_expression) {
         return Err(StatusCode::BAD_REQUEST);
     }
 
@@ -173,11 +172,14 @@ pub async fn delete_schedule(
     Path(id): Path<i64>,
 ) -> Result<StatusCode, StatusCode> {
     check_auth(&headers, &state.config.admin_password)?;
-    sqlx::query("DELETE FROM scheduled_tasks WHERE id = $1")
+    let res = sqlx::query("DELETE FROM scheduled_tasks WHERE id = $1")
         .bind(id)
         .execute(&state.db)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if res.rows_affected() == 0 {
+        return Err(StatusCode::NOT_FOUND);
+    }
     Ok(StatusCode::OK)
 }
 
