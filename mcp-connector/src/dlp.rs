@@ -178,4 +178,13 @@ mod tests {
         assert_eq!(violations[0].label, "AWS Access Key");
         assert!(violations[0].redacted_sample.contains("[REDACTED]"));
     }
+
+    #[test]
+    fn test_dlp_json_tool_call_params_detected() {
+        let engine = DlpEngine::new();
+        let tool_params_json = r#"{"name":"deploy","arguments":{"api_key":"AKIAIOSFODNN7EXAMPLE"}}"#;
+        let violations = engine.scan(tool_params_json);
+        assert!(!violations.is_empty(), "Should detect sensitive tokens inside JSON tool parameters");
+        assert_eq!(violations[0].label, "AWS Access Key");
+    }
 }

@@ -7,7 +7,7 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::json;
-use axum::response::sse::{Event, Sse};
+use axum::response::sse::{Event, KeepAlive, Sse};
 use std::convert::Infallible;
 
 use crate::auth::validate_client_authorization;
@@ -167,6 +167,26 @@ pub async fn tools_call_handler(
         return (StatusCode::BAD_REQUEST, Json(McpResponse::method_not_found(payload.id))).into_response();
     }
 
+    // ── DLP Pre-Flight: scan tool parameters before dispatching (Pillar 5) ───
+    if let Some(params) = &payload.params {
+        let params_str = params.to_string();
+        let dlp_violations = state.dlp_engine.scan(&params_str);
+        if !dlp_violations.is_empty() {
+            let labels: Vec<&str> = dlp_violations.iter().map(|v| v.label).collect();
+            tracing::warn!(
+                "🛡️ DLP BLOCK: MCP tools/call parameters contain sensitive data patterns: {:?}. Request blocked.",
+                labels
+            );
+            let err = McpResponse::error(
+                payload.id.clone(),
+                -32000,
+                format!("DLP Policy Violation: potential sensitive data detected ({}).", labels.join(", ")),
+                Some(json!({"patterns": labels})),
+            );
+            return (StatusCode::UNPROCESSABLE_ENTITY, Json(err)).into_response();
+        }
+    }
+
     // Intercept built-in KB tools
     if payload.method == "tools/call" {
         if let Some(params) = &payload.params {
@@ -233,7 +253,9 @@ pub async fn tools_call_handler(
         yield Ok::<Event, Infallible>(Event::default().data("[DONE]"));
     };
 
-    Sse::new(stream).into_response()
+    Sse::new(stream)
+        .keep_alive(KeepAlive::default())
+        .into_response()
 }
 
 async fn handle_kb_tool(
@@ -329,5 +351,7 @@ async fn handle_kb_tool(
         yield Ok::<Event, Infallible>(Event::default().data("[DONE]"));
     };
 
-    Sse::new(stream).into_response()
+    Sse::new(stream)
+        .keep_alive(KeepAlive::default())
+        .into_response()
 }
