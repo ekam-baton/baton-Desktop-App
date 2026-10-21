@@ -454,16 +454,43 @@ pub async fn refresh_device_token(
 ) -> Result<RefreshResponse, AuthError> {
     let claims = validate_refresh_token(refresh_token, &state.config.jwt_refresh_secret)?;
 
-    // Ensure the device is still active and registered
-    if !state.paired_devices.contains_key(&claims.sub) {
-        let exists = sqlx::query("SELECT 1 FROM paired_devices WHERE client_id = $1")
-            .bind(&claims.sub)
-            .fetch_optional(&state.db)
-            .await
-            .ok()
-            .flatten()
-            .is_some();
-        if !exists {
+    // Check if the user is in authorized_users and whether their authorization has been revoked
+    use sqlx::Row;
+    let user_row = sqlx::query("SELECT status FROM authorized_users WHERE client_id = $1")
+        .bind(&claims.sub)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| {
+            tracing::error!("DB error during token refresh authorization check: {}", e);
+            AuthError::Invalid("Database error".into())
+        })?;
+
+    if let Some(row) = user_row {
+        let status: String = row.try_get("status").unwrap_or_default();
+        if status != "approved" {
+            tracing::warn!(
+                "Blocked token refresh for unapproved client '{}' (status: '{}')",
+                claims.sub,
+                status
+            );
+            return Err(AuthError::Revoked);
+        }
+    } else {
+        // Fallback: Ensure the device is still active and registered in paired_devices
+        let mut paired = state.paired_devices.contains_key(&claims.sub);
+        if !paired {
+            let exists = sqlx::query("SELECT 1 FROM paired_devices WHERE client_id = $1")
+                .bind(&claims.sub)
+                .fetch_optional(&state.db)
+                .await
+                .ok()
+                .flatten()
+                .is_some();
+            if exists {
+                paired = true;
+            }
+        }
+        if !paired {
             return Err(AuthError::Revoked);
         }
     }
@@ -480,6 +507,37 @@ pub async fn refresh_device_token(
         refresh_token: new_refresh_token,
         expires_in: state.config.jwt_expiry_hours * 3600,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_token_pair_generation_and_validation() {
+        let client_id = "test_device_123";
+        let access_secret = "test_access_secret_12345678901234567890";
+        let refresh_secret = "test_refresh_secret_12345678901234567890";
+        let (access, refresh) = generate_token_pair(client_id, access_secret, refresh_secret, 24).unwrap();
+
+        // Validating refresh token with refresh_secret succeeds
+        let refresh_claims = validate_refresh_token(&refresh, refresh_secret).unwrap();
+        assert_eq!(refresh_claims.sub, client_id);
+        assert_eq!(refresh_claims.kind, "refresh");
+
+        // Attempting to validate refresh token with access_secret fails
+        assert!(validate_refresh_token(&refresh, access_secret).is_err());
+
+        // Attempting to validate access token as refresh token fails
+        assert!(validate_refresh_token(&access, refresh_secret).is_err());
+    }
+
+    #[test]
+    fn test_oversized_refresh_token_rejected() {
+        let huge_token = "a".repeat(5000);
+        let res = validate_refresh_token(&huge_token, "some_secret");
+        assert!(res.is_err());
+    }
 }
 
 
