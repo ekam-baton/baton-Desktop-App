@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { toast } from 'sonner';
+import { Trash2 } from 'lucide-react';
 import { useAppContext } from '../../contexts/AppContext';
 import { basicAuthHeader } from '../../lib/utils';
 
@@ -35,6 +36,25 @@ export const KnowledgeBaseSettings = () => {
     }
   };
 
+  const handleDeleteDirectory = async (id: number) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/knowledge/${id}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': basicAuthHeader(adminPassword)
+        }
+      });
+      if (res.ok) {
+        toast.success('Directory removed from index');
+        loadData();
+      } else {
+        toast.error('Failed to remove directory');
+      }
+    } catch {
+      toast.error('Network error while removing directory');
+    }
+  };
+
   return (
     <>
       <h1>Local Knowledge Base</h1>
@@ -64,11 +84,19 @@ export const KnowledgeBaseSettings = () => {
           <div className="empty-state">No directories indexed yet.</div>
         ) : (
           knowledgeDirs.map((dir) => (
-            <div key={dir.id} className="request-card">
+            <div key={dir.id} className="request-card" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div className="info">
                 <div className="client-name">{dir.directory_path}</div>
                 <div className="client-pubkey">Files: {dir.file_count} • Indexed: {dir.created_at}</div>
               </div>
+              <button 
+                onClick={() => handleDeleteDirectory(dir.id)} 
+                className="btn-deny" 
+                title="Remove directory"
+                style={{ padding: '0.5rem', display: 'flex', alignItems: 'center' }}
+              >
+                <Trash2 size={16} />
+              </button>
             </div>
           ))
         )}

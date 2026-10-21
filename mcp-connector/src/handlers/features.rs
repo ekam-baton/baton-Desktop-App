@@ -248,6 +248,29 @@ pub async fn get_knowledge(
     Ok(Json(dirs))
 }
 
+pub async fn delete_knowledge(
+    headers: HeaderMap,
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> Result<StatusCode, StatusCode> {
+    check_auth(&headers, &state.config.admin_password)?;
+    let res = sqlx::query("DELETE FROM knowledge_base WHERE id = $1")
+        .bind(id)
+        .execute(&state.db)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if res.rows_affected() == 0 {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    sqlx::query("INSERT INTO audit_logs (event_type, detail, severity) VALUES ($1, $2, 'info')")
+        .bind("KNOWLEDGE_DELETED")
+        .bind(format!("Deleted indexed knowledge base entry #{}", id))
+        .execute(&state.db)
+        .await
+        .ok();
+    Ok(StatusCode::OK)
+}
+
 pub async fn handoff_upload(
     headers: HeaderMap,
     State(state): State<Arc<AppState>>,

@@ -273,11 +273,17 @@ async fn handle_kb_tool(
         match tool_params.name.as_str() {
             "kb_add_document" => {
                 // Parse arguments: { "title": "...", "content": "..." }
-                let title = tool_params.arguments.get("title").and_then(|v| v.as_str()).unwrap_or("Untitled").to_string();
-                let content = tool_params.arguments.get("content").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let title = tool_params.arguments.get("title").and_then(|v| v.as_str()).unwrap_or("Untitled").trim();
+                let content = tool_params.arguments.get("content").and_then(|v| v.as_str()).unwrap_or("").trim();
                 
                 if content.is_empty() {
                     let err = McpResponse::error(payload.id.clone(), -32602, "Missing content".into(), None);
+                    let _ = tx.send(Ok(serde_json::to_string(&err).unwrap_or_else(|_| "{}".into()))).await;
+                    return;
+                }
+
+                if content.len() > 1_000_000 || title.len() > 256 || title.chars().any(|c| c.is_control()) {
+                    let err = McpResponse::error(payload.id.clone(), -32602, "Content exceeds 1MB limit or title exceeds 256 characters".into(), None);
                     let _ = tx.send(Ok(serde_json::to_string(&err).unwrap_or_else(|_| "{}".into()))).await;
                     return;
                 }
@@ -302,7 +308,7 @@ async fn handle_kb_tool(
             }
             "kb_search" => {
                 // Parse arguments: { "query": "..." }
-                let query = tool_params.arguments.get("query").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let query = tool_params.arguments.get("query").and_then(|v| v.as_str()).unwrap_or("").trim();
                 
                 if query.is_empty() {
                     let err = McpResponse::error(payload.id.clone(), -32602, "Missing query".into(), None);
@@ -310,8 +316,14 @@ async fn handle_kb_tool(
                     return;
                 }
 
+                if query.len() > 512 || query.chars().any(|c| c.is_control()) {
+                    let err = McpResponse::error(payload.id.clone(), -32602, "Query exceeds 512 characters or contains control characters".into(), None);
+                    let _ = tx.send(Ok(serde_json::to_string(&err).unwrap_or_else(|_| "{}".into()))).await;
+                    return;
+                }
+
                 // Search top 5 most relevant chunks in this isolated namespace
-                match state.knowledge_base.search(&namespace, &query, 5).await {
+                match state.knowledge_base.search(&namespace, query, 5).await {
                     Ok(results) => {
                         let mut result_text = String::new();
                         for (i, chunk) in results.iter().enumerate() {

@@ -338,6 +338,7 @@ pub async fn run_server() -> anyhow::Result<()> {
         .route("/api/inbox", get(handlers::features::get_inbox))
         .route("/api/knowledge", get(handlers::features::get_knowledge))
         .route("/api/knowledge", post(handlers::features::create_knowledge))
+        .route("/api/knowledge/{id}", axum::routing::delete(handlers::features::delete_knowledge))
         .route("/api/handoff/upload", post(handlers::features::handoff_upload))
         // Merge sub-routers
         .merge(pair_router)
