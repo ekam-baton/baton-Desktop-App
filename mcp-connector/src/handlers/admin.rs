@@ -740,6 +740,14 @@ pub async fn update_session_handler(
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     check_auth(&headers, &state.config.admin_password)?;
 
+    let exists = sqlx::query("SELECT id FROM chat_sessions WHERE id = $1")
+        .bind(&id)
+        .fetch_optional(&state.db).await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if exists.is_none() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
     let now = chrono::Utc::now().timestamp_millis();
 
     if let Some(title) = payload.title {
@@ -776,10 +784,14 @@ pub async fn delete_session_handler(
         .execute(&state.db).await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    sqlx::query("DELETE FROM chat_sessions WHERE id = $1")
+    let res = sqlx::query("DELETE FROM chat_sessions WHERE id = $1")
         .bind(&id)
         .execute(&state.db).await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if res.rows_affected() == 0 {
+        return Err(StatusCode::NOT_FOUND);
+    }
 
     Ok(StatusCode::OK)
 }
@@ -823,6 +835,14 @@ pub async fn add_session_message_handler(
 ) -> Result<Json<StoredChatMessage>, StatusCode> {
     check_auth(&headers, &state.config.admin_password)?;
 
+    let exists = sqlx::query("SELECT id FROM chat_sessions WHERE id = $1")
+        .bind(&id)
+        .fetch_optional(&state.db).await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if exists.is_none() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
     let msg_id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().timestamp_millis();
 
@@ -861,6 +881,14 @@ pub async fn clear_session_messages_handler(
     State(state): State<Arc<AppState>>,
 ) -> Result<StatusCode, StatusCode> {
     check_auth(&headers, &state.config.admin_password)?;
+
+    let exists = sqlx::query("SELECT id FROM chat_sessions WHERE id = $1")
+        .bind(&id)
+        .fetch_optional(&state.db).await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if exists.is_none() {
+        return Err(StatusCode::NOT_FOUND);
+    }
 
     sqlx::query("DELETE FROM chat_messages WHERE session_id = $1")
         .bind(&id)
@@ -960,11 +988,15 @@ pub async fn revoke_authorization_handler(
 ) -> Result<StatusCode, StatusCode> {
     check_auth(&headers, &state.config.admin_password)?;
 
-    sqlx::query("DELETE FROM agent_authorizations WHERE client_id = $1 AND agent_id = $2")
+    let res = sqlx::query("DELETE FROM agent_authorizations WHERE client_id = $1 AND agent_id = $2")
         .bind(&client_id)
         .bind(&agent_id)
         .execute(&state.db).await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if res.rows_affected() == 0 {
+        return Err(StatusCode::NOT_FOUND);
+    }
 
     Ok(StatusCode::OK)
 }
