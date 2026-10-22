@@ -143,8 +143,13 @@ pub async fn run_server() -> anyhow::Result<()> {
     // ── State ─────────────────────────────────────────────────────────────────
     let state = Arc::new(AppState::new(config.clone(), pool));
 
-    // Preload persisted paired devices into memory cache across restarts
-    if let Ok(paired_rows) = sqlx::query("SELECT client_id, public_key FROM paired_devices")
+    // Preload persisted paired devices into memory cache across restarts (only approved devices)
+    if let Ok(paired_rows) = sqlx::query(
+        "SELECT p.client_id, p.public_key \
+         FROM paired_devices p \
+         INNER JOIN authorized_users a ON p.client_id = a.client_id \
+         WHERE a.status = 'approved'"
+    )
         .fetch_all(&state.db)
         .await
     {

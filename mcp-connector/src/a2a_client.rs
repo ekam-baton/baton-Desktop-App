@@ -384,6 +384,20 @@ async fn process_envelope(
         }
     };
 
+    // CRITICAL: Persist ratchet state immediately after decryption.
+    // This guarantees that the receiver counter (Nr) and any ratchet step transitions are
+    // committed to SQLite, preventing permanent cryptographic desynchronization if downstream
+    // execution times out or encounters an error.
+    if let Ok(new_state_json) = serde_json::to_string(&ratchet_state) {
+        let new_state_enc = crate::auth::encrypt_db_field(&new_state_json, &state.config.jwt_secret).unwrap_or_default();
+        let _ = sqlx::query(
+            "UPDATE paired_devices SET ratchet_state = $1 WHERE client_id = $2"
+        )
+        .bind(new_state_enc)
+        .bind(&envelope.sender_id)
+        .execute(&state.db).await;
+    }
+
     let decrypted_json = match String::from_utf8(decrypted_bytes) {
         Ok(s) => s,
         Err(_) => return,
@@ -403,44 +417,72 @@ async fn process_envelope(
         }
     };
 
-    // ── 4. Validate that the requested method is allowed ─────────────────────
+    // ── 4. Validate method and execute ────────────────────────────────────────
     let allowed_methods = ["tools/call", "tools/list", "initialize", "notifications/initialized"];
-    if !allowed_methods.contains(&req.method.as_str()) {
-        warn!("A2A request from '{}' used disallowed method '{}' — dropping", envelope.sender_id, req.method);
-        return;
-    }
-
-    // ── 5. Route to the correct MCP agent ────────────────────────────────────
-    let client = if let Some(c) = state.mcp_clients.get(&format!("openclaw:{}", envelope.sender_id)) {
-        Some(c.clone())
+    let res = if !allowed_methods.contains(&req.method.as_str()) {
+        warn!("A2A request from '{}' used disallowed method '{}'", envelope.sender_id, req.method);
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": req.id,
+            "error": {
+                "code": -32601,
+                "message": format!("Method '{}' is not permitted over A2A bridge", req.method)
+            }
+        })
     } else {
-        let target = state.config.mcp_agents.keys().next().cloned()
-            .unwrap_or_else(|| "openclaw".to_string());
-        crate::handlers::mcp::get_or_spawn_client(&state, &target, &envelope.sender_id)
-            .or_else(|| state.mcp_clients.iter().next().map(|e| e.value().clone()))
-    };
+        // ── 5. Route to the correct MCP agent ────────────────────────────────
+        let client = if let Some(c) = state.mcp_clients.get(&format!("openclaw:{}", envelope.sender_id)) {
+            Some(c.clone())
+        } else {
+            let target = state.config.mcp_agents.keys().next().cloned()
+                .unwrap_or_else(|| "openclaw".to_string());
+            crate::handlers::mcp::get_or_spawn_client(&state, &target, &envelope.sender_id)
+                .or_else(|| state.mcp_clients.iter().next().map(|e| e.value().clone()))
+        };
 
-    let client = match client {
-        Some(c) => c,
-        None => {
-            error!("No MCP agent available to handle A2A request from '{}'", envelope.sender_id);
-            return;
-        }
-    };
-
-    // ── 6. Execute with timeout ───────────────────────────────────────────────
-    let res = match tokio::time::timeout(
-        Duration::from_secs(60),
-        client.send_request(&req)
-    ).await {
-        Ok(Ok(val)) => val,
-        Ok(Err(e)) => {
-            error!("Agent error for A2A request from '{}': {}", envelope.sender_id, e);
-            return;
-        }
-        Err(_) => {
-            error!("Agent timed out for A2A request from '{}'", envelope.sender_id);
-            return;
+        match client {
+            Some(client) => {
+                // ── 6. Execute with timeout ──────────────────────────────────
+                match tokio::time::timeout(
+                    Duration::from_secs(60),
+                    client.send_request(&req)
+                ).await {
+                    Ok(Ok(val)) => val,
+                    Ok(Err(e)) => {
+                        error!("Agent error for A2A request from '{}': {}", envelope.sender_id, e);
+                        serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": req.id,
+                            "error": {
+                                "code": -32603,
+                                "message": format!("Agent error: {}", e)
+                            }
+                        })
+                    }
+                    Err(_) => {
+                        error!("Agent timed out for A2A request from '{}'", envelope.sender_id);
+                        serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": req.id,
+                            "error": {
+                                "code": -32000,
+                                "message": "Agent execution timed out after 60s"
+                            }
+                        })
+                    }
+                }
+            }
+            None => {
+                error!("No MCP agent available to handle A2A request from '{}'", envelope.sender_id);
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": req.id,
+                    "error": {
+                        "code": -32601,
+                        "message": "No MCP agent available"
+                    }
+                })
+            }
         }
     };
 
@@ -468,7 +510,7 @@ async fn process_envelope(
         ciphertext: STANDARD.encode(out_ciphertext),
     };
 
-    // Update Ratchet State in DB (Encrypted at rest)
+    // Update Ratchet State in DB after encrypting outbound response (Encrypted at rest)
     if let Ok(new_state_json) = serde_json::to_string(&ratchet_state) {
         let new_state_enc = crate::auth::encrypt_db_field(&new_state_json, &state.config.jwt_secret).unwrap_or_default();
         let _ = sqlx::query(
