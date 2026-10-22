@@ -339,6 +339,10 @@ pub async fn handoff_upload(
             .ok();
     }
     
+    if file_count == 0 {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
     sqlx::query("INSERT INTO audit_logs (event_type, detail, severity) VALUES ($1, $2, 'success')")
         .bind("HANDOFF_RECEIVED")
         .bind(format!("Injected {} files into context memory.", file_count))

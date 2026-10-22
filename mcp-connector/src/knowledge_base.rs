@@ -94,8 +94,9 @@ impl KnowledgeBase {
 
     /// Very simple word-based chunker for documents.
     pub fn chunk_text(text: &str, chunk_size_words: usize) -> Vec<String> {
+        let chunk_size = chunk_size_words.max(1);
         let words: Vec<&str> = text.split_whitespace().collect();
-        words.chunks(chunk_size_words)
+        words.chunks(chunk_size)
             .map(|chunk| chunk.join(" "))
             .collect()
     }
@@ -110,6 +111,9 @@ mod tests {
         let text = "one two three four five";
         let chunks = KnowledgeBase::chunk_text(text, 2);
         assert_eq!(chunks, vec!["one two", "three four", "five"]);
+
+        let zero_chunks = KnowledgeBase::chunk_text("one two three", 0);
+        assert_eq!(zero_chunks, vec!["one", "two", "three"]);
     }
 
     #[test]
