@@ -100,8 +100,8 @@ type SessionSender = mpsc::UnboundedSender<Message>;
 
 #[derive(Clone)]
 struct AppState {
-    /// Local connected sessions: client_id → websocket sender channel
-    local_sessions: Arc<DashMap<String, SessionSender>>,
+    /// Local connected sessions: client_id → (websocket sender channel, connection_id)
+    local_sessions: Arc<DashMap<String, (SessionSender, String)>>,
     config: Config,
     redis_pool: deadpool_redis::Pool,
     pg_pool: PgPool,
@@ -270,7 +270,8 @@ async fn internal_forward_handler(
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
     }
 
-    if let Some(tx) = state.local_sessions.get(&msg.receiver_id) {
+    if let Some(session) = state.local_sessions.get(&msg.receiver_id) {
+        let tx = &session.value().0;
         if let Ok(payload_str) = serde_json::to_string(&msg) {
             let _ = tx.send(Message::Text(payload_str.into()));
             state.messages_routed.with_label_values(&["delivered_local_from_peer"]).inc();
@@ -322,7 +323,8 @@ async fn handle_socket(socket: WebSocket, client_id: String, state: Arc<AppState
     let (mut ws_sender, mut ws_receiver) = socket.split();
     let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
 
-    state.local_sessions.insert(client_id.clone(), tx.clone());
+    let conn_id = Uuid::new_v4().to_string();
+    state.local_sessions.insert(client_id.clone(), (tx.clone(), conn_id.clone()));
 
     // 1. Maintain Presence in Redis
     let presence_key = format!("presence:{}", client_id);
@@ -398,21 +400,25 @@ async fn handle_socket(socket: WebSocket, client_id: String, state: Arc<AppState
         _ = &mut recv_task => { send_task.abort(); presence_task.abort(); },
     }
 
-    state.local_sessions.remove(&client_id);
-    state.connections_gauge.dec();
-    
-    // Clean up presence immediately
-    if let Ok(mut conn) = state.redis_pool.get().await {
-        let _: redis::RedisResult<()> = conn.del(presence_key).await;
+    let removed = state.local_sessions.remove_if(&client_id, |_, val| val.1 == conn_id);
+    if removed.is_some() {
+        state.connections_gauge.dec();
+        // Clean up presence immediately only if this was the active connection
+        if let Ok(mut conn) = state.redis_pool.get().await {
+            let _: redis::RedisResult<()> = conn.del(presence_key).await;
+        }
+        info!("Client disconnected: {}", client_id);
+    } else {
+        info!("Client connection superseded: {} (retaining newer session)", client_id);
     }
-    info!("Client disconnected: {}", client_id);
 }
 
 // ─── Routing Core ────────────────────────────────────────────────────────────
 
 async fn route_message(msg: A2AMessage, state: &Arc<AppState>) {
     // 1. Is it local?
-    if let Some(tx) = state.local_sessions.get(&msg.receiver_id) {
+    if let Some(session) = state.local_sessions.get(&msg.receiver_id) {
+        let tx = &session.value().0;
         if let Ok(payload_str) = serde_json::to_string(&msg) {
             let _ = tx.send(Message::Text(payload_str.into()));
             state.messages_routed.with_label_values(&["delivered_local"]).inc();

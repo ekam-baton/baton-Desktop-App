@@ -139,8 +139,16 @@ impl StdioMcpClient {
         // Serialize and send (newline-delimited JSON)
         let mut req_str = serde_json::to_string(request)?;
         req_str.push('\n');
-        proc.stdin.write_all(req_str.as_bytes()).await?;
-        proc.stdin.flush().await?;
+        if let Err(e) = proc.stdin.write_all(req_str.as_bytes()).await {
+            let _ = proc.child.start_kill();
+            *guard = None;
+            return Err(anyhow!("Failed to write to agent stdin: {}", e));
+        }
+        if let Err(e) = proc.stdin.flush().await {
+            let _ = proc.child.start_kill();
+            *guard = None;
+            return Err(anyhow!("Failed to flush agent stdin: {}", e));
+        }
 
         // Read response with per-line size limit and overall timeout using persistent lines reader
         let result = tokio::time::timeout(
@@ -170,7 +178,14 @@ impl StdioMcpClient {
         ).await;
 
         match result {
-            Ok(inner) => inner,
+            Ok(Ok(val)) => Ok(val),
+            Ok(Err(e)) => {
+                if let Some(ref mut proc) = *guard {
+                    let _ = proc.child.start_kill();
+                }
+                *guard = None;
+                Err(e)
+            }
             Err(_elapsed) => {
                 if let Some(ref mut proc) = *guard {
                     let _ = proc.child.start_kill();

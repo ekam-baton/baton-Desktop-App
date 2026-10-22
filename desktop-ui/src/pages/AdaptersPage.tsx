@@ -41,14 +41,25 @@ export const AdaptersPage: React.FC = () => {
   };
 
   const handleAddAdapter = () => {
-    if (!newAdapterUrl || !newAdapterName) {
+    let url = newAdapterUrl.trim();
+    const name = newAdapterName.trim();
+    if (!url || !name) {
       toast.error('Please fill all fields');
+      return;
+    }
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      url = 'http://' + url;
+    }
+    try {
+      new URL(url);
+    } catch {
+      toast.error('Invalid URL format');
       return;
     }
     const newAdapter: Adapter = {
       id: Date.now().toString(),
-      name: newAdapterName,
-      url: newAdapterUrl,
+      name,
+      url,
     };
     saveAdapters([...adapters, newAdapter]);
     setIsModalOpen(false);
@@ -116,18 +127,29 @@ export const AdaptersPage: React.FC = () => {
     const baseUrl = selectedAdapter.url.replace(/\/+$/, '');
     setLogs(['Connecting to management API...', 'Connected to ' + baseUrl]);
     
-    const controller = new AbortController();
+    let isMounted = true;
+    let activeController: AbortController | null = null;
 
     const fetchLogs = () => {
+      if (!isMounted) return;
+      if (activeController) {
+        activeController.abort();
+      }
+      activeController = new AbortController();
+      const currentController = activeController;
+      const timeoutId = setTimeout(() => currentController.abort(), 2500);
+
       fetch(`${baseUrl}/mgmt/logs`, {
         headers: { 'Mgmt-Api-Key': activeApiKey },
-        signal: controller.signal
+        signal: currentController.signal
       })
       .then(res => {
+         clearTimeout(timeoutId);
          if (!res.ok) throw new Error('Fetch failed');
          return res.json();
       })
       .then(data => {
+         if (!isMounted) return;
          if (Array.isArray(data)) {
            setLogs(data.map(d => typeof d === 'string' ? d : JSON.stringify(d)));
          } else {
@@ -135,7 +157,8 @@ export const AdaptersPage: React.FC = () => {
          }
       })
       .catch((err) => {
-         if (err instanceof Error && err.name !== 'AbortError') {
+         clearTimeout(timeoutId);
+         if (isMounted && err instanceof Error && err.name !== 'AbortError') {
            setLogs(prev => [...prev.slice(-19), `[${new Date().toLocaleTimeString()}] Connection error`]);
          }
       });
@@ -145,8 +168,11 @@ export const AdaptersPage: React.FC = () => {
     const interval = setInterval(fetchLogs, 3000);
     
     return () => {
+      isMounted = false;
       clearInterval(interval);
-      controller.abort();
+      if (activeController) {
+        activeController.abort();
+      }
     };
   }, [selectedAdapter, activeApiKey]);
 
