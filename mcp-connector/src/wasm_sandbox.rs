@@ -133,6 +133,14 @@ fn run_wasm_tool_blocking(
         .map_err(|_| anyhow!("Failed to extract stdout buffer from WASI pipe"))?
         .into_inner();
 
+    const MAX_WASM_STDOUT_BYTES: usize = 10 * 1024 * 1024; // 10MB
+    if stdout_buf.len() > MAX_WASM_STDOUT_BYTES {
+        return Err(anyhow!(
+            "Wasm tool stdout output exceeded 10MB limit ({} bytes produced)",
+            stdout_buf.len()
+        ));
+    }
+
     let output = String::from_utf8(stdout_buf)
         .map_err(|e| anyhow!("Wasm stdout contained invalid UTF-8: {}", e))?;
 

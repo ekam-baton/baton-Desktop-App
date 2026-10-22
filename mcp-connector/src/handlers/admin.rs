@@ -390,6 +390,31 @@ pub struct Group {
     pub created_at: i64,
 }
 
+fn mint_router_jwt(client_id: &str, secret: &str) -> Option<String> {
+    if secret.is_empty() {
+        return None;
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs() as usize;
+    #[derive(Serialize)]
+    struct RouterClaims {
+        sub: String,
+        exp: usize,
+    }
+    let claims = RouterClaims {
+        sub: client_id.to_string(),
+        exp: now + 300,
+    };
+    jsonwebtoken::encode(
+        &jsonwebtoken::Header::default(),
+        &claims,
+        &jsonwebtoken::EncodingKey::from_secret(secret.as_bytes()),
+    )
+    .ok()
+}
+
 pub async fn create_group_handler(
     headers: HeaderMap,
     State(state): State<Arc<AppState>>,
@@ -433,12 +458,21 @@ pub async fn create_group_handler(
         "members": members_with_creator,
     });
 
-    let res = state.http.post(&create_url)
-        .json(&req_body)
-        .send().await;
+    let mut req_builder = state.http.post(&create_url).json(&req_body);
+    if let Some(token) = mint_router_jwt(&creator_id, &state.config.a2a_router_secret) {
+        req_builder = req_builder.bearer_auth(token);
+    }
 
-    if let Err(e) = res {
-        tracing::error!("Failed to create group on cloud router: {}", e);
+    let res = req_builder.send().await;
+    match res {
+        Ok(resp) => {
+            if !resp.status().is_success() {
+                tracing::warn!("Cloud router returned status {} for group creation", resp.status());
+            }
+        }
+        Err(e) => {
+            tracing::error!("Failed to create group on cloud router: {}", e);
+        }
     }
 
     Ok(Json(Group {
@@ -489,14 +523,25 @@ pub async fn delete_group_handler(
         .execute(&state.db).await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
+    let creator_id = hex::encode(state.config.ed25519_public_key);
     let http_url = state.config.a2a_router_url.replace("wss://", "https://").replace("ws://", "http://");
-    let delete_url = format!("{}/group/{}", http_url, id);
+    let delete_url = format!("{}/group/{}?creator_id={}", http_url, id, creator_id);
 
-    let res = state.http.delete(&delete_url)
-        .send().await;
+    let mut req_builder = state.http.delete(&delete_url);
+    if let Some(token) = mint_router_jwt(&creator_id, &state.config.a2a_router_secret) {
+        req_builder = req_builder.bearer_auth(token);
+    }
 
-    if let Err(e) = res {
-        tracing::error!("Failed to delete group on cloud router: {}", e);
+    let res = req_builder.send().await;
+    match res {
+        Ok(resp) => {
+            if !resp.status().is_success() {
+                tracing::warn!("Cloud router returned status {} for group deletion", resp.status());
+            }
+        }
+        Err(e) => {
+            tracing::error!("Failed to delete group on cloud router: {}", e);
+        }
     }
 
     Ok(StatusCode::OK)
